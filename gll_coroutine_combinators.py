@@ -16,7 +16,7 @@ try:
 except ImportError:
     from singledispatch import singledispatch as _singledispatch
 
-from keyword_only_args import decorator_closure as keyword_only_args
+from keyword_only_args.decorator_closure import keyword_only_args
 
 
 import abc

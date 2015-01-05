@@ -1,0 +1,746 @@
+\documentclass[12pt]{article}
+
+\usepackage[sc,osf]{mathpazo}
+\usepackage[T1]{fontenc}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+\begin{document}
+
+\section{Design Decisions}
+\label{sec:design_decisions}
+
+For grammars, I went with CFGs.  I considered using PEGs with packrat,
+but memory requirements for the parse tree are already huge and the
+additional memory required for the packrat memoization on top of that
+is almost certainly impractical, my experiments indicate that the
+parser performance is already close to O(n) without any memoization
+and experiments in Becket and Somogyi (\emph{DCGs + Memoing = Packrat
+  Parsing: Is It Worth It?}) shows that using no memoization is often
+close to optimal, and any performance gains would probably be consumed
+by memory usage issues.  There are probably other viable parsing
+algorithms for PEGs that have runtimes more like GLL or GLR, but I
+don't know what those algorithms are or even if anyone's created them.
+Moreover, the packrat parser uses memoization to handle both direct
+and indirect left recursion, so I would need some more sophisticated
+algorithm that could parse left-recursive grammars without
+memoization.  I also don't know for sure if PEGs have the kind of
+compositionality I need, though I suspect they do---the Yakker authors
+implemented PEGs as a backend.  That said, the memoization is the main
+reason I chose CFGs over PEGs.  PEGs are the clear runner-up to CFGs,
+because I know that parser combinators can be written for PEGs and
+alternatives to PEGs and CFGs are not well-studied enough in general
+to have efficient parsing algorithms or in some cases even for
+important properties like compositionality to be established.  Boolean
+grammars are a promising approach but they're not mature enough yet.
+
+The backend parsing algorithm will be GLL.  The chief alternatives,
+GLR and Earley, are both harder to understand, while GLL is almost
+like a recursive-descent parser.  GLL's similarities to
+recursive-descent make it much easier to implement as parser
+combinators.  Earley is the clear runner-up here, since there exist
+implementations of it using parser combinators and efficient
+theoretical developments of the algorithm that include all the key
+features I want like SPPF creation and data-dependent grammars.  As
+far as I know, there are no parser combinators for bottom-up parsers
+like GLR.  The original versions of both GLR and Earley have
+theoretical problems with producing parse trees, and for GLR, fixing
+those problems has created a plethora of alternatives.  There being no
+canonical version of GLR is a good secondary reason to avoid it.
+Memoization being too memory-intensive also rules out dealing with
+left recursion in recursive-descent with it as Frost and Johnson
+propose, and besides they can't handle ambiguity.
+
+The data-dependent grammars described in the Yakker papers will handle
+context sensitivity.  First, they're based on a CFG back-end, which
+makes them easier to adapt for one of the efficient existing CFG
+algorithms.  Second, they're closest to the existing Construct 2
+implementation, which means that converting Construct 2's syntax and
+existing code based on the library should be relatively easy.  Third,
+they're proved correct and have established performance behavior
+including worst-case bounds.  Fourth, they're compatible with a variety
+of algorithms with the authors implementing them in particular for
+combinators and for GLR (which is related to GLL).  Fifth, they
+support black-box parsers, which makes them easy to extend.
+
+For error handling I'm using Richter's non-correcting error recovery.
+When parsing binary data, one major problem with finding errors is
+that the point where the parser fails is often not the point where the
+input or parser went wrong.  Non-correcting error recovery brackets a
+range where the error may have occurred, making it easier to find
+errors.  It's also more suited to the kinds of errors in binary data
+in general, which are usually not like typos or other small isolated
+errors but large blocks of broken data, and to Python's interactive
+debugging.  It uses the suffix grammar and the reverse grammar of the
+original input grammar.  While deterministic grammars are not closed
+under suffix (I don't know about reverse), CFGs are, and because I'm
+using GLL, I can use the same algorithm for both normal parsing and
+error-handling.
+
+
+\section{Implementation Order}
+\label{sec:implementation_order}
+
+\begin{enumerate}
+\item GLL combinators.
+\item Non-correcting error recovery, for debugging.
+\item Tests.
+\item Performance benchmarks.
+\item Data-dependent grammar functionality, in some as yet TBD order.
+\item Transducers and other forms of compilation.
+\end{enumerate}
+
+
+\section{Major Implementation Choices}
+\label{sec:implementation_choices}
+
+\subsection{Return an iterator over parse trees or a shared packed
+  parse forest.}
+\label{sec:iterator_sppf}
+
+Spiewak chose the former option for his GLL combinators in Scala, but
+it has a couple of problems.  First, it involves freezing the parser
+state, which means that starting a parse requires creating a new
+parser state.  This has some performance implications, particularly
+with respect to memory, and makes cleaning up afterwards more
+difficult, probably demanding some kind of context manager to close
+running coroutines.  Second, it means that changing the implementation
+of the parse forest almost certainly involves changing the
+implementation of the parser itself because the parser state is
+entangled with its output.  Third, iterating over subtrees as well as
+alternatives trees will require nested iterators, i.e. an iterator
+that returns another iterator, which gets confusing and requires some
+doubly-suspended state.  Grune and Jacobs bring up another problem in
+what they call the producer-consumer model: anyone wanting to use the
+parse trees will have to analyze multiple trees to figure out how they
+differ to figure out what to do with them.  (Note that it's easy to
+build an infinite iterator so that method should be able to handle
+infinitely-ambiguous grammars.  Avoiding analyzing tree-by-tree will
+require users to understand the SPPF and a good API for analyzing it
+without generating trees.)  They point out that coroutines can reduce
+some of these problems by putting the parser and the consumer of the
+parse tree on an equal footing.  Moura and Ierusalimschy (2009,
+"Revisiting coroutines") show that asymmetric coroutines are as
+powerful as symmetric ones, so it ought to be possible to implement
+this in Python, but I suspect the implementation would involve
+creating a trampoline that passes data between the producer and
+consumer coroutines, and I'm not sure if the added complexity is
+worthwhile, especially given it would involve a performance hit.
+
+Thus, I'm running with the SPPF.  Initially, I'm going to implement
+Tomita's worst-case unbounded-polynomial version rather than Scott and
+Johnstone's binarized worst-case cubic version because binarization
+will make the resulting parse forest harder to understand and work
+with, and I doubt anything this library will ever process will
+approach the worst case because that should only happen with
+pathologically-ambiguous grammars.  However, I should make sure to
+encapsulate the SPPF so if I need to binarize the implementation later
+I don't need to change anything else.
+
+
+\subsection{Tree and SPPF API}
+\label{sec:tree_sppf_api}
+
+With a traditional recursive-descent parser, the definitions of the
+nonterminals in the grammar and their corresponding functions provide
+natural nodes for the parse tree.  In a parser built from combinators,
+however, because the combinators don't intrinsically have nodes, it's
+not clear how to build the parse tree.  As far as I can tell,
+traditional parser combinators always use the sequence combinator to
+build the tree out of nested lists/tuples, either by having it build a
+flat list/tuple out of two or more alternatives like Construct's
+Sequence (Struct, which makes an ordered map, is a variation on this)
+or nested binary lists/tuplesx, like Spiewak's combinators.  Other
+non-monadic combinator implementations follow the same general
+approach: Hughes in \emph{Generalizing Monads to Arrows} observes,
+
+\begin{quote}
+  For example, it is fairly clear that a library for parsing should
+  include a combinator to invoke two parsers in sequence, but there
+  are many possible ways in which such a combinator might handle the
+  two parsers' results.  In some early parsing libraries the two
+  results were paired together, in others the sequencing combinator
+  took an extra parameter, a function to combine the results.
+\end{quote}
+
+The clearest explanation I've found of the relationship between this
+traditional sequence combinator and monadic combinators is in Vegard
+\O ye's article (2012, \url{https://github.com/epsil/gll}): they
+define an operation bind (this is the monadic bind) that takes a
+parser and a function, applies the parser to the input, applies the
+function to a success to get another parser, and then applies the
+resulting parser to the success to get the final output.  They then
+define the sequence combinator in terms of a double bind, passing the
+list constructor as the function to bind; for a sequence combinator
+with more than two elements, they use fold/reduce with list-append to
+get a flat list rather than nested lists from one combinator.  The
+Hutton and Meijer paper (\emph{Monadic Parser Combinators}) also shows
+how to build a sequence combinator using bind and a concatenation
+function for lists, in this case specifically to avoid nested tuples.
+While the standard approach to defining monads, settled on by Haskell
+and seemingly imitated by everyone else, is to define a monad in terms
+of return (sometimes called result) and bind, one can also define
+monads in terms of three functions, return, join, and map (sometimes
+fmap), and then define bind in terms of join and map.
+
+Writing monadic (or arrow-style) parsers in Python would be stupid, so
+I need a sequence combinator and will follow this universal (as far as
+I know) practice and define the nodes in the tree using it.  I can let
+it take a constructor with which to build the parse tree with a
+default constructor or expect that standard usage involves
+transforming the parse tree with semantic actions.  While monadic bind
+combines the choice of parse tree with the sequence combinator, my
+understanding is that separating join and map separates the two, so
+having a semantic action combinator following a sequence combinator
+can simulate any choice of bind for monadic combinators.
+
+Irrespective of the internal representation, I also need to figure out
+the interface the SPPF presents to the users.  The SPPF itself is hard
+to understand so a direct implementation would make for a bad API.  My
+best idea for handling this is to build a tree-centric API where users
+interact with the SPPF as if it was a collection of trees.  One
+obvious problem after creating the SPPF is how to allow user code to
+examine individual trees.  Luckily, this problem has an obvious
+solution: instead of returning a copy of an individual tree, I can
+return an object that contains references to the correct nodes in the
+SPPF.  However, implementing anything more than simple views on the
+SPPF is \emph{hard}.  I still haven't come up with a better idea for
+the tree API itself than Construct's: because trees are a recursive
+data structure, allowing recursive references using Python's []
+addressing provides a natural API.
+
+That said, for users to deal with ambiguity in any efficient manner
+will probably require users to both understand the SPPF and have
+direct access to it; I have no idea how to implement such an API or to
+integrate it with the hopefully-simpler tree-centric API.
+
+How semantic actions interact with the SPPF presents some thorny
+issues.  Semantic actions are essential, as aside from needing them to
+emulate the power of monadic combinators, they're required for
+directing parsing with previously-parsed input, essential in many
+common parser tasks like ignoring whitespace, one of the better reasons
+for using a top-down parser in the first place, and possibly important
+in performing disambiguations while the parser is running.  Because
+I can't figure out how to transform the SPPF as if it was a collection
+of trees, though, without brute force and maybe not even then, I still
+haven't settled on how to set semantic actions up.  I have some
+incompletely-realized partial ideas:
+
+\begin{itemize}
+\item Higher-order functions on trees: filter, map, reduce.
+\item A higher-order function that converts a function acting on trees
+  to a function acting on SPPFs.  I don't know how to write it, though.
+\item The visitor pattern and other kinds of traversals with functions
+  acting on the tree/SPPF.
+\end{itemize}
+
+
+\subsection{Tree and SPPF representations}
+\label{sec:tree_sppf_representations}
+
+Traditional parser combinators don't provide any natural node labeling
+because of the absence of labeled nonterminals.  A tree representation
+based on high-level sequences and ordered mappings, in Python
+lists/tuples and OrderedDicts, doesn't need these node labels, and
+it's possible to implement combinators that return trees or an
+iterator over trees without them.  However, for a shared packed
+forest, labels are required for implementing subtree sharing because
+without them, combinators in different branches of the parse traversal
+have no way to know when they've generated the same subtree.
+Moreover, GLL needs labels to merge different branches of the parse in
+the GSS, so while it's possible to omit node labels altogether in a
+traditional recursive-descent parser, any GLL parser needs labels.
+There's an natural labeling scheme for parse trees based on
+partitioning the input that Scott and Johnstone use but never
+explicitly explain.  Each terminal or uninterrupted sequence of
+terminals has a starting and ending offset so the corresponding leaf
+node can be labeled with (terminals, starting\_offset,
+ending\_offset).  The leaf nodes read in offset order must cover the
+entire input, and in fact reading them in order in the absence of
+semantic actions will return the original input.  The rest of the tree
+nodes represent partitions further subdivided into subpartitions
+labeled with nonterminals, with the root node corresponding to
+(start\_symbol, 0, length(input) - 1) (zero-indexed).  Because parser
+combinators don't have nonterminal labels, Spiewak uses parser
+identity instead.  Like Spiewak, I intend to use parser combinator
+class instances as node labels in GLL.  Note that generator objects
+can't be used for this, since a new generator object is created every
+time a generator function is called, and neither can the method or
+code objects, because they're shared by all instances of the same
+parser combinator class.
+
+Both trees and forests are fundamentally directed graphs, normally
+acyclic but in the case of infinitely-ambiguous grammars cyclic.  In
+Python, one possible graph representation is a dict of lists, where
+the lists contain the labels of other nodes.  By using the labels
+discussed above as the labels for the nodes, it's possible to
+represent a parse tree as a digraph where the values of leaf nodes are
+Python objects representing terminals and the values of non-leaf nodes
+are lists of either pairs of integers, the direct labels for other
+nodes, or single integers representing the subpartitions for that
+node.  Eliding the terminal and nonterminal symbols for clarity, for
+instance:
+
+\begin{verbatim}
+(1, 8) : [(1, 2), (2, 5), (5, 8)]
+(1, 8) : [2, 5]
+\end{verbatim}
+
+The superfluous integers correspond to the "repeated dimensions" that
+Johnstone and Scott describe in \emph{Modelling GLL Parser
+  Implementations} (2010).  The latter representation obviously takes
+less memory but node operations will be slower because correct
+offset-pairs will have to be generated from the partitions when
+they're needed.
+
+The SPPF can have almost an identical representation to the parse
+trees themselves because it's also fundamentally a digraph.  There are
+only two differences: nodes can have more than one parent,
+corresponding to subtree sharing, and there has to be a way to
+distinguish packed nodes from normal nodes because they have different
+meanings.  In the binarized SPPF, Johnstone and Scott define normal
+nodes using two offsets, called "left extent" and "right extent", and
+packed nodes using a single integer, called "pivot."  In the
+partition representation any node with only two children can be
+represented with a single integer, the division between the subtrees.
+A packed node is the result of combining at least two nodes, so a
+minimal binarized packed node looks like:
+
+Original nodes:
+\begin{verbatim}
+(0, 4): [(0, 1), (1, 4)]
+(0, 4): [(0, 3), (3, 4)]
+\end{verbatim}
+
+Packed node:
+\begin{verbatim}
+(0, 4): [((0, 3), (3, 4)), ((0, 1), (1, 4))]
+\end{verbatim}
+
+Binarized nodes:
+\begin{verbatim}
+(0, 4): Packed(1), Packed(3)
+Packed(1): [(0, 1), (1, 4)]
+Packed(3): [(0, 3), (0, 4)]
+\end{verbatim}
+
+However, I don't understand the relationship between Scott and
+Johnstone's partition model and parses that don't consume all the
+input.  The natural way to implement nondeterminism leads to returning
+all incomplete parses as well as the complete parses.  Both Spiewak
+and Hutton and Meijer mention this natural ambiguity.
+
+\begin{quote}
+  It is also worth noting that we do not allow \texttt{Success}(es)
+  which have failed to consume the entire input stream.  We will
+  actually receive a \texttt{Success} every time a \texttt{Parser}
+  reduces successfully. While this is technically correct (reflecting
+  the ambiguity between greedy and non-greedy matching), it is almost
+  never the desired semantics.  (Spiewak)
+\end{quote}
+
+Scott and Johnstone's constructions of parsers from recognizers seem
+to rely on greedy matching, because their partitioning scheme only
+works with matches of the full input.  They also restrict packing to
+nodes that share the same partition, ``Nodes can be packed only if
+their yields correspond to the same portion of the input string''
+(Scott, \emph{SPPF-Style Parsing from Earley Recognisers}).  This
+doesn't seem to work in cases with partial/non-greedy matching because
+every nontrivial node will have partial matches that don't cover the
+same partition.
+
+A further observation that may or may not be related is that their
+node labeling scheme seems to include unneeded information.  A given
+parser started at the same position should always produce the same
+output, so all that's needed for a unique node label is (parser label,
+starting index into the input).  In fact, in one of their early papers
+(\emph{BRNGLR: a cubic Tomita-style GLR parsing algorithm}), they use
+this labeling scheme, rather than the later three-element labels.  I
+don't understand why, and if or how this might be connected with
+greedy matching.  A final note on the greedy-matching issue is
+that the obvious implementation of nondeterminism applied naively
+leads to the wrong recognizer, because a partial match will report
+success even if the whole string is not matched.
+
+In the aforementioned paper, they use a table-based representation
+for all the data structures, including the SPPF.  Following the data
+structure refinement process outlined there, the declarations for the
+SPPF are:
+
+\begin{verbatim}
+SPPFSymbolNode (SPPFLabel s, Int leftExtent, Int rightExtent)
+
+SPPFPackNode (SPPFLabel s, Int pivot)
+
+SPPF (SPPFSymbolNode symbolNode, SPPFPackNode packNode, SPPFSymbolNode left, SPPFSymbolNode right)
+
+SPPF sppf
+\end{verbatim}
+
+Substituting:
+
+\begin{verbatim}
+sppf ((*symbolNode) SPPFLabel, Int, Int)
+      (*packNode) SPPFLabel, Int)
+      (*left) SPPFLabel, Int, Int)
+      (*right) SPPFLabel, Int, Int)
+     )
+\end{verbatim}
+
+The left extent for the left node is the same as parent's, the left
+node's right extent is the same as the left extent of the right node,
+and the right extent for the right node is the same as the parent's.
+The SPPFLabel for the pack node and the parent node are also the same.
+
+\begin{verbatim}
+sppf ((*symbolNode) SPPFLabel, Int, Int)
+      (*packNode) Int)
+      (*left) SPPFLabel, Int)
+      (*right) SPPFLabel)
+     )
+\end{verbatim}
+
+This still seems like too much: it's a seven-dimensional table with
+four dimensions indexed by integers, which as they note in the paper
+is too large.
+
+The clearly-fastest implementation with the best encapsulation is to
+use Cython to write a specialized SPPF object, with the exact methods
+needed for building it, with an appropriate internal representation,
+possibly based on the ideas from the \emph{Modeling GLL
+  Implementations} refinement discussed above.  All other approaches
+will require methods implemented in Python (which will be slow) to do
+the necessary transformations.  To achieve anywhere near acceptable
+performance, I have to use native Python data structures or C/C++
+extensions.  Any encapsulation has a performance overhead because I
+won't be able to use comprehensions to speed up object creation, but
+beyond that full encapsulation from the parsers will cost more speed
+because they will have to call methods in Python.  On the whole, I'm
+convinced enough of the advantages of encapsulation, particularly the
+possible need to rewrite the whole thing in Cython, that the first
+version will involve partial encapsulation with methods written in
+Python for the user API and hard-coding the parsers.  On that point,
+there's very little reason, as far as I can tell, to expose the
+internal node labels to the user.
+
+There's one possible other representation of the SPPF about which I
+know little called parse-forest grammars, introduced on pp. 91-93 of
+Grune and Jacobs.  They have production rules labeled almost
+identically to Johnstone and Scott's SPPF, a nonterminal, a starting
+position, and a length (which is isomorphic to using the ending
+position).  I personally don't see how any of the supposed advantages
+Grune and Jacobs list for them are good for writing practical parsers
+and the API they'd provide would be very unintuitive for people used
+to conventional parsers, but they're another possible internal
+representation.
+
+
+\subsection{Immutability vs. mutability}
+\label{sec:immutable_mutable}
+
+There are two different approaches to the data flow through the
+parser, the functional-immutable style where functions, or in this
+case, coroutines, create objects and return them and the mutable-state
+style where a mutable object is passed into a function or coroutine,
+which then mutates it and returns nothing.  The choice of which style
+to use can be made on a per-object basis, but because in most
+languages including Python functions can only return one object, and
+in the case of Python coroutines can only yield and accept through
+send() one object, functions that need to return more than one object
+have to aggregate all the objects they need to return into one object.
+Handling the aggregation and disaggregation for parsers is an example
+of the monadic pattern, as even recognizer combinators need to return
+a Boolean representing whether a given input is in the language
+generated by a grammar and also a stream object representing the
+truncation of its input.  Real parsers always need to return the same
+Boolean, a stream, and a parse tree.  Other patterns are possible:
+Construct uses a Python stream, which is a mutable object, and thus
+doesn't need to return a stream.  An empty parse tree or some kind of
+null result (None in Python) can represent failure, but this is a bad
+idea since it provides no information about where the failure occurred
+or what happened.
+
+In traditional object-oriented recursive-descent parsers, the whole
+parser would be one class and mutable objects could be handled as
+shared state.  As it is, since my combinators are classes, I have to
+pass mutable objects instead.  This isn't the worst thing in the world
+since passing objects will avoid self look-ups, helping performance,
+and is explicit rather than implicit.  Several of the implementations
+I've looked at do similar things.  Spiewak's GLL combinators use a
+functional-immutable style for the tree, returning a list in the
+simplified implementation and a stream/iterator in the real
+implementation, but an OO class for the trampoline.  Scott and
+Johnstone's example GLL implementation uses an OO class for the parser
+with a mutable shared SPPF.  Jim and Mandelbaum's transducers for
+data-dependent grammars also use a mutable SPPF.
+
+For GLL, the combinators could potentially return success/failure, the
+GSS, the SPPF, the stream, and the pointer.  Mutable objects only need
+to be passed in when starting a new coroutine instance and don't need
+to be yielded or passed via send() because every coroutine will
+already have access to them.  The advantage of mutability is speed,
+and its main problem is that it always has more potential for creating
+hard-to-isolate bugs.  Unfortunately, Python is simply not designed
+for the functional-immutable style and obviously has no optimizations
+in the compiler/interpreter for handling immutable object creation for
+non-built-ins.  Thus, the functional-immutable style with an
+encapsulated Python object will be many times over too slow.
+(\url{http://www.valuedlessons.com/2008/03/why-are-my-monads-so-slow.html}
+gives some numbers suggesting how much too slow.)
+
+For the SPPF, the only way to implement sharing in a functional
+fashion is to pass a memoized cache and discard it after building the
+SPPF.  Otherwise, combinators in different branches of the parse won't
+be able to share subtrees.  However, a memoized cache itself is most
+of the way to an SPPF, so there's no real reason to use the former in
+place of the latter.  The SPPF is so large (I'm estimating a factor of
+>100 times over the input, and that's optimistic) that recreating it
+in every parser is wildly impractical, so it has to be mutable.
+However, there's a further problem with building the SPPF as a mutable
+object passed among combinators that Jim and Mandelbaum describe in
+\emph{Delayed Semantic Actions in Yakker}: nodes that get added to the
+SPPF during branches of the parse that eventually dead-end will
+continue to exist in the final SPPF.  The solution they use in OCaml
+is to use a weak hash table.  The best option in Python is similarly
+to use a weak dictionary.  This creates several knock-on effects.
+First, strong references to the nodes in the SPPF have to be stored in
+the SPPF \emph{somewhere} or else the whole structure will get
+garbage-collected, and the only reasonable place to put them is in the
+nodes themselves, thus a weak dictionary of objects that hold
+references to other nodes.  Second, most Python built-in types and
+subclasses thereof are not weak-referencable in CPython.  Subclasses
+of lists and dicts can be weak-referenced, while lists and dicts
+themselves can't.  (None of this behavior is defined for all
+implementations, though PyPy seems to follow CPython here.)  Changing
+from subclasses of tuple to list has memory and speed penalties, but
+the alternative to using Python's weakref module is doing manual
+object destruction myself, and that's just awful.  Third, to keep
+nodes alive while building the SPPF I need strong references outside
+it, which means the combinators need to return strong references.
+Fourth, terminals have to be enclosed in some kind of
+weak-referencable proxy object.
+
+That said, while the SPPF has to mutable, the nodes making it up can
+be immutable.  There are advantages and disadvantages to both
+approaches.
+
+\begin{itemize}
+\item Mutable nodes make it easier to transform trees and reduce the
+  memory overhead of transformation operations since they avoid
+  copying.  How common is it to need to transform a parse tree,
+  though?  For writing a compiler/interpreter or a converter for a
+  binary data format, for instance, the parse tree is used to build
+  another kind of object, not mutated in-place.
+\item Immutable nodes prevent a broad class of potentially
+  hard-to-find bugs related to mutating a tree in one node in an SPPF
+  and causing changes that propagate to other trees incorrectly.  This
+  is a particular problem with semantic actions where users shouldn't
+  need to understand the particulars of the parsers or the SPPF.
+\item Immutable objects could provide memory advantages, but Python's
+  implementation makes this difficult.  There's no built-in immutable
+  mapping type, and tuples can't be weak-referenced.  To get the
+  memory savings, I'd either have to give up speed by using
+  composition and methods implemented in Python to enclose tuples in a
+  weak-referencerable object or use Cython to implement my own types
+  in C.
+\item Immutable containers are hashable, which is essential for any
+  kind of elegant way of handling which packed nodes to traverse in a
+  tree view of an SPPF and useful for implementing packed nodes as
+  frozensets, gaining the automatic ability to avoid duplicates when
+  packing.
+\end{itemize}
+
+Spiewak passes the trampoline that contains the GSS as a mutable
+object for ``convenience and efficiency,'' and I'm leaning towards
+following his lead.  For parsing, I'm passing the stream as an
+immutable object.  That leaves only success/failure, the pointer, and
+a node reference as immutable objects I need to create in each combinator.
+
+\begin{itemize}
+\item GSS: mutable, passed
+\item SPPF: mutable, passed
+\item Stream: immutable, passed
+\item Success/Failure: immutable, returned
+\item Stream pointer: immutable, returned
+\item Node: immutable, stored in SPPF and returned
+\end{itemize}
+
+There is one other possible way to circumvent the bad performance of
+the functional-immutable style, which is to use compilation/code
+generation to eliminate the intermediate data structures.  This may
+turn out to be the best option, and in the end is almost certain to be
+the fastest, especially if I go all the way to a two-stage compiler
+that compiles Python to Cython and Cython to C.  At the moment, I
+don't understand it well enough to enumerate its advantages and
+disadvantages.
+
+
+\subsection{Outer-Loop Trampoline}
+\label{sec:trampoline}
+
+In Python, the trampoline has to run as the outermost loop and call
+the coroutines because Python coroutines are asymmetric, they can only
+return control to their callers with yield.  If I instead try to pass
+the trampoline through the combinators, there's no way for them to
+pass control to the trampoline.  Conveniently, GLL is organized with a
+dispatch function such that every parser returns control to it after
+finishing execution, which is my trampoline.
+
+
+\subsection{Yield from}
+\label{sec:yield_from}
+
+The main problem with "yield from" is that it's only available on
+Python 3.  Also, experimentation suggests that as of 3.4, using "yield
+from" still hits the maximum recursion depth which means that "yield
+from" still adds a stack frame for each call, and Python has a small
+stack limit.  On the other hand, without "yield from", Python's
+coroutines are not stackful (see Moura 2009, "Revisiting Coroutines"),
+which means they may not be as powerful as one-shot continuations and
+might not be powerful enough for GLL.  That said, I know that "yield
+from" is internally implemented with a trampoline, and the existence
+of Eby's "fiendishly clever" trampoline implementation for Python 2
+suggests it ought to be possible to use a trampoline to convert Python
+2's stackless coroutines into stackful coroutines by manually
+implementing a stack.  I also might end up needing a trampoline
+anyways to handle the graph-structured stack, in which case the
+advantage offered by "yield from" may be diminished.
+
+My tentative analysis is that "yield from" simply isn't useful for
+GLL.  GLL's dispatch stack contains information about the GSS and SPPF
+as well as which parser needs to resume control, so replacing the
+stack with "yield from" isn't going to get me very far since I'll
+still need another stack to hold the GSS and SPPF information, even if
+it's possible to handle the dispatching without that added
+information.  I suspect that it's either impossible to use "yield
+from" with GLL or that the added complexity from trying to integrate
+the two would completely negate any performance or simplicity gains.
+This, combined with the lack of "yield from" in 2.7, means I'm not
+going to try to use it.
+
+
+\subsection{Memoryviews vs. pointers}
+\label{sec:memoryviews_pointers}
+
+With Python 2.7+'s memoryviews, it's possible to slice the stream
+without copying, embedding slices in the parse forests passed between
+combinators.  I don't know if it's faster, more memory-efficient,
+both, or neither.  The main disadvantage of this approach is that it
+means the combinators can't handle text since there's no equivalent
+for Python strings, and there are three other factors to consider: all
+of the Python library functions (string methods, struct, re, and so
+on) take an optional argument that's a starting pointer anyways,
+there's no equivalent stringview object (I'd have to write one), and
+pointers provide natural labels for the GSS and SPPF (and memoryviews
+are only hashable in 3.3+, so they can't take over that role in 2.7).
+Primarily because of the last two considerations, I'm going with
+pointers.
+
+
+\subsection{Module for handling bits}
+\label{sec:bits_module}
+
+The main module implemented in C for bit arrays/bit vectors is
+\href{https://github.com/ilanschnell/bitarray}{bitarray}
+(\href{https://pypi.python.org/pypi/bitarray/}{PyPi}).  I don't know
+how hard it will be to make this work with PyPy, but I'm going to give
+it a shot.  The main two pure-Python implementations are
+\href{https://engineering.purdue.edu/kak/dist/BitVector-3.3.2.html}{BitVector}
+(\href{https://pypi.python.org/pypi/BitVector/3.3.2}{PyPi}) and
+\href{https://code.google.com/p/python-bitstring/}{bitstring}
+(\href{https://pypi.python.org/pypi/bitstring/3.1.3}{PyPi}).  For the
+prototype, I'm going with bitstring but will return to bitarray once I
+look at performance optimizations.
+
+\subsubsection{bitarray}
+\label{sec:bitarray}
+
+This ought to be the fastest because it's implemented in C, but by the
+same token, it will probably pose the biggest compatibility problems,
+particularly with PyPy.  The API is clean and mimics the standard
+sequence types, but has the major disadvantage of having no offset
+option in any of the constructors, which would require copying without
+using memoryview, and some imperfections in the handling of
+conversions (it has a tostring() method, but I don't know if calling
+str() works, for instance).  There's no immutable bitarray type, which
+would mean that I'd have to make my own.  Bitarray is packaged for
+Ubuntu.
+
+\subsubsection{bitstring}
+\label{sec:bitstring}
+
+Implemented in pure Python, this ought to be compatible with
+everything.  There's also a Cython version, though from looking at it
+doesn't seem to have many optimizations over the pure-Python version.
+The API includes mutable and immutable types and supports reading from
+at a binary object at an arbitrary offset, though obviously it doesn't
+support the buffer protocol, and works the way it should with respect
+to functions like str().  On the whole, it has clearly the best API.
+
+\subsubsection{BitVector}
+\label{sec:bitvector}
+
+Also implemented in pure Python, it ought to have similar
+compatibility to bitstring.  The API has the same problem as
+bitarray's, no reading binary data at an offset, with the additional
+disadvantage of not supporting the buffer protocol.  Moreover, the API
+as a whole doesn't resemble that of the standard sequence types.  The
+only advantage of this module is that it has built-in methods for
+certain kinds of advanced operations on bit arrays, but that's not
+that important.
+
+
+\section{Notes}
+\label{sec:notes}
+
+\subsection{Yakker SPPF}
+\label{sec:yakker_sppf}
+
+The major differences between my current implementation and the Yakker
+implementation are:
+
+\begin{itemize}
+\item The non-packed nodes in their tree are binarized.
+\item Nodes embed both packing and the normal branching in the same
+  data structure.  Each node contains a list of pairs of children.
+\item Every node contains, in addition to its children, an arbitrary
+  semantic value and a label.
+\item Both have a weak hash table containing links to all the partial
+  trees in the forest.  However, their implementation seems to use the
+  hash table like a set, with a function that checks directly if a
+  partial tree is in the table and returning it if so.
+\end{itemize}
+
+\subsection{Parse-forest grammars and adjacency-list digraphs}
+\label{sec:parse-forest_grammars_adjacency-list_digraphs}
+
+My original representation of trees/forests as digraphs using
+adjacency lists containing node labels (rather than node references)
+is very close (I haven't done the detailed analysis to determine how
+close) to a parse-forest grammar.  I don't know if there are uses for
+this interpretation, but it's something to keep in mind especially
+when considering code generation and error handling.
+
+\subsection{Arrow combinators}
+\label{sec:arrow_combinators}
+
+Hughes notes that any arrow that supports \emph{apply} is, in effect,
+a monad.  He makes the further observation that \emph{apply} and the
+choice operator can't be defined for the kind of parser that Swiestra
+and Duponcheel discuss and states, ``Luckily, this does not matter: it
+is rare that we \emph{want} to write a parser which decides on the
+grammar to accept on the basis of previously parsed values.''  Of
+course, since this is exactly what I'm trying to do, using arrows here
+would be counterproductive.  What this means exactly for integrating
+any of Swierstra and Duponcheel's ideas into my combinators I'm not
+sure: is there some kind of model that can incorporate both the
+necessary dependence on past parse results and the separation of
+static and dynamic elements in arrows?  I don't know.
+
+\subsection{Tunnel / Monadic Bind?}
+\label{sec:tunnel_bind}
+
+Is there a connection?  I actually think I can implement Tunnel with
+Act/>>.
+
+\end{document}

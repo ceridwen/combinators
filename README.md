@@ -29,3 +29,7 @@ build a parser combinator library that:
 * Has improved error reporting.
 
 * May do just-in-time compilation for improved speed.
+
+## License
+
+MIT.

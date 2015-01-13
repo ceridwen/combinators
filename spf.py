@@ -5,6 +5,8 @@ from __future__ import print_function
 import collections
 import itertools
 import weakref
+# A bug in pprint on 2.7 prevents it from working correctly with
+# frozensets: http://bugs.python.org/issue20192.
 import pprint
 try:
     from functools import singledispatch
@@ -35,16 +37,16 @@ class Tree(collections.Sized, collections.Iterable, collections.Container):
 
     def __getitem__(self, key):
         item = self.root[key]
-        if isinstance(item, Leaf):
-            return item.value
-        else:
+        if isinstance(item, Node):
             return TreeView(item, self._nodes)
+        else:
+            return item
 
     def __len__(self):
-        return sum(1 for n in self._nodes.values() if not isinstance(n, Node))
+        return sum(1 for i in self.leaves())
 
     def __contains__(self, item):
-        return any(item == n for n in self._nodes.values())
+        return any(item == i for i in self.leaves())
 
     def __iter__(self):
         """Iterates over subtrees."""
@@ -54,7 +56,7 @@ class Tree(collections.Sized, collections.Iterable, collections.Container):
             elif isinstance(i, Node):
                 yield TreeView(i, self._nodes)
             else:
-                yield i.value
+                yield i
 
     def leaves(self):
         """Iterator over this tree's leaves.
@@ -72,7 +74,7 @@ class Tree(collections.Sized, collections.Iterable, collections.Container):
             elif isinstance(node, Node):
                 to_visit.extend(reversed(node))
             else:
-                yield node.value
+                yield node
 
     def __str__(self):
         """Using WeakValueDictionary's __repr__ creates infinite recursion in
@@ -145,10 +147,10 @@ class SharedPackedForest(Tree):
             node = root
             while isinstance(node, PackedNode):
                 node = unpacked_nodes[node]
-            if isinstance(node, Leaf):
-                yield node
-            else:
+            if isinstance(node, Node):
                 yield TreeView(root, self._nodes, unpacked_nodes)
+            else:
+                yield node
             while packed_nodes:
                 packed_node, nodes, to_visit, unpacked_nodes = packed_nodes[-1]
                 try:
@@ -164,17 +166,14 @@ class SharedPackedForest(Tree):
     def leaves(self):
         """Traversal of this SPF's leaves."""
         to_visit = [self.root]
-        visited = set()
         while to_visit:
             node = to_visit.pop()
             if isinstance(node, PackedNode):
-                to_visit.extend(node)
+                to_visit.append(next(iter(node)))
             elif isinstance(node, Node):
                 to_visit.extend(reversed(node))
             else:
-                if node not in visited:
-                    yield node.value
-                    visited.add(node)
+                yield node
 
     def istree(self):
         """If this SPF is a tree (has no packed nodes), returns True."""
@@ -203,10 +202,10 @@ class TreeView(Tree):
         item = self.root[key]
         while isinstance(item, PackedNode):
             item = self._unpacked_nodes[item]
-        if isinstance(item, Leaf):
-            return item.value
-        else:
+        if isinstance(item, Node):
             return TreeView(item, self._nodes, self._unpacked_nodes)
+        else:
+            return item
 
     def __len__(self):
         return sum(1 for n in self.leaves())
@@ -225,10 +224,10 @@ class TreeView(Tree):
                 return nested(self._unpacked_nodes[root])
             elif isinstance(root, SeqNode):
                 return [nested(n) for n in root]
-            elif isinstance(root, MapNode):
+            elif isinstance(root, _MapNode):
                 return {k: nested(v) for k, v in root.items()}
             else:
-                return root.value
+                return root
         return pprint.pformat(nested(self.root))
 
 
@@ -272,7 +271,22 @@ class Node(object):
 
 
 class SeqNode(list, Node):
-    """ Holds nodes and other Python objects."""
+    """Tree node for unstructured data.
+
+    This would be a tuple subclass except that subclasses of tuple
+    can't be weak-referenced.  Unfortunately, this means it claims to
+    be a MutableSequence even though I've overridden the methods that
+    mutate it.  The other possible solution is creating some kind of
+    tuple proxy class, but it's substantially slower to create all
+    possible tuple proxies (more than an order of magnitude slower in
+    CPython, slower in PyPy too thought not as slow), basic operations
+    like __getitem__ are slower too, and the class adds more memory
+    overhead.  While I might investigate wrapt's transparent object
+    proxy implemented in C, probably I will need to write a
+    weak-referencable tuple-like type in Cython, to change the
+    underlying tree representation, or both.
+
+    """
     __slots__ = ('__hash', '__weakref__')
 
     def __hash__(self):
@@ -291,12 +305,148 @@ class SeqNode(list, Node):
 
     append = __immutable
     clear = __immutable
-    copy = __immutable
     extend = __immutable
     insert = __immutable
     pop = __immutable
     remove = __immutable
     reverse = __immutable
+    sort = __immutable
+    __iadd__ = __immutable
+    __imul__ = __immutable
+
+
+class _MapNode(Node):
+    """Tree node that maps names to objects for structured data.
+
+    This is another work-around for the inability of tuples, including
+    namedtuples, to be weak-referenced.  A hash table has memory
+    overhead that's too high for the small numbers of objects that
+    often occur in parse tree nodes of structured data.  Instead, this
+    class acts something like a C struct, with a fixed set of names
+    defined in __slots__.  While it implements most of the the mapping
+    interface, it is not a proper mapping because it iterates (and
+    reverse iterates) over values, not keys.  Note that attribute
+    access by map_node.a is faster in CPython than access through
+    __getitem__, map_node['a'].
+
+    """
+    __slots__ = ('__hash', '__weakref__')
+
+    def __init__(self, iterable):
+        if len(iterable) < self._length:
+            raise TypeError('Expected %d arguments, got %d' % (len(self.__slots__), len(iterable)))
+        for key, value in zip(self.__slots__, iterable):
+            setattr(self, key, value)
+
+    def __getitem__(self, key):
+        try:
+            if key in self.__slots__:
+                return getattr(self, key)
+            else:
+                raise KeyError
+        except AttributeError:
+            raise KeyError
+
+    def __len__(self):
+        return len(self.__slots__)
+
+    def __iter__(self):
+        for key in self.__slots__:
+            yield getattr(self, key)
+
+    def __reversed__(self):
+        for key in reversed(self.__slots__):
+            yield getattr(self, key)
+
+    def __contains__(self, key):
+        return key in self.__slots__
+
+    def get(self, key, default = None):
+        if key in self.__slots__:
+            return getattr(self, key, defauilt)
+        else:
+            return default
+
+    def copy(self):
+        copy = self.__class__()
+        for  key in self.__slots__:
+            setattr(copy, key, getattr(self, key))
+        return copy
+
+    def __hash__(self):
+        if not hasattr(self, '__hash'):
+            self.__hash = hash(frozenset(self.items()))
+        return self.__hash
+
+    def __eq__(self, other):
+        if not isinstance(other, collections.Mapping):
+            return NotImplemented
+        return dict(self.items()) == dict(other.items())
+
+    def __ne__(self, other):
+        return not (self == other)
+
+    def __repr__(self):
+        return pprint.pformat(dict(self.items()))
+
+    def keys(self):
+        return self.KeysView(self)
+    def items(self):
+        return self.ItemsView(self)
+    def values(self):
+        return self.ValuesView(self)
+
+    class MappingView:
+        """For some reason the View objects in collections don't define
+        __slots__, so I have to redefine them here.  Given this, I
+        specialize these views to _MapNode.  In 2.7, collections.Set
+        doesn't have __slots__ so KeyView and ItemView will be less
+        memory efficient there, but it's not worth reimplementing all
+        the set functions to avoid that problem.
+
+        """
+        __slots__ = ('_mapping')
+        def __init__(self, mapping):
+            self._mapping = mapping
+        def __len__(self):
+            return self._mapping._length
+        def __repr__(self):
+            return '{0.__class__.__name__}({0._mapping!r})'.format(self)
+
+    class KeysView(MappingView, collections.Set):
+        __slots__ = ()
+        def __contains__(self, key):
+            return key in self._mapping.__slots__
+        def __iter__(self):
+            for key in self._mapping.__slots__:
+                yield key
+
+    class ItemsView(MappingView, collections.Set):
+        __slots__ = ()
+        def __contains__(self, item):
+            key, value = item
+            if key in self._mapping.__slots__ and getattr(self._mapping, key) == value:
+                return True
+            else:
+                return False
+        def __iter__(self):
+            for key in self._mapping.__slots__:
+                yield (key, getattr(self._mapping, key))
+
+    class ValuesView(MappingView):
+        __slots__ = ()
+        def __contains__(self, value):
+            for key in self._mapping.__slots__:
+                if getattr(self._mapping, key) == value:
+                    return True
+            return False
+        def __iter__(self):
+            for key in self._mapping.__slots__:
+                yield getattr(self._mapping, key)
+
+def MapNode(names, name=None):
+    name = 'MapNode_%s' % '_'.join(names) if not name else name
+    return type(name, (_MapNode,), {'__slots__': names, '_length': len(names)})
 
 
 class PackedNode(frozenset, Node):
@@ -308,99 +458,11 @@ class PackedNode(frozenset, Node):
     (Alternately, I should check and see if Hettinger ever actually
     added memory-efficient hash tables to set.)  Note that frozensets
     can be weak-referenced so I don't need to add __weakref__ to
-    slots.
+    slots.  This is a candidate for replacement with Hettinger's
+    more memory-efficient hash table implementation.
 
     """
     __slots__ = ()
-
-
-class MapNode(dict, Node):
-    """Node that is a non-standard mapping of names to nodes and other
-    objects.
-
-    Unlike collections.OrderedDict, this doesn't need a linked list
-    because it doesn't need to handle insertions or deletions.
-    Unfortunately, this class claims to be a MutableMapping because it
-    subclasses dict even though it's immutable.  This is an ideal
-    candidate for replacement with Hettinger's memory-efficient dict.
-
-    """
-    __slots__ = ('__values', '__hash', '__weakref__')
-
-    def __init__(self, other):
-        if isinstance(other, collections.Mapping):
-            self.__values = tuple(other.values())
-            super(MapNode, self).__init__(other)
-        else:
-            super(MapNode, self).__init__()
-            values = []
-            for k, v in other:
-                values.append(v)
-                super(MapNode, self).__setitem__(k, v)
-            self.__values = tuple(values)
-
-    @classmethod
-    def fromkeys(iterable, value = None):
-        super(MapNode, self).__init__(zip(iterable, itertools.repeat(value)))
-        self.__values = (value,)*len(self)
-
-    def __iter__(self):
-        return iter(self.__values)
-
-    def __reversed__(self):
-        return reversed(self.__values)
-
-    def copy(self):
-        return MapNode(self)
-
-    def __hash__(self):
-        if not hasattr(self, self.__hash):
-            self.__hash = hash(frozenset(self.items()))
-        return self.__hash
-
-    def __contains__(self, value):
-        return (value in self.__values)
-
-    def __setitem__(self, *args, **kws):
-        raise TypeError("'%s' object does not support item assignment" % type(self))
-
-    def __delitem__(self, *args, **kws):
-        raise TypeError("'%s' object does not support item deletion" % type(self))
-
-    def __immutable(self, *args, **kws):
-        raise TypeError("'%s' object is immutable" % type(self))
-
-    clear = __immutable
-    update = __immutable
-    setdefault = __immutable
-    pop = __immutable
-    popitem = __immutable
-
-
-class Leaf(object):
-    """This is a minimal container for other Python objects, allowing them
-    to be weak-referenced.  Because nodes contain Leaves, Leaves also
-    must be hashable.
-
-    """
-    __slots__ = ('value', '__weakref__') # '__hash', 
-    def __init__(self, value):
-        self.value = value
-        # self.__hash = hash(self.value)
-        
-    # def __hash__(self):
-    #     return self.__hash
-
-    # def __eq__(self, other):
-    #     if isinstance(other, Leaf):
-    #         return self.value == other.value
-    #     else:
-    #         return self.value == other
-
-    def __str__(self):
-        return str(self.value)
-
-    __repr__ = __str__
 
 
 if __name__ == '__main__':
@@ -423,29 +485,29 @@ if __name__ == '__main__':
     #              'b'      'c'
 
     def make_tree(tree, seqnode, mapnode):
-        a = Leaf('a')
-        b = Leaf('b')
-        c = Leaf('c')
-        d = Leaf('d')
-        e = Leaf('e')
-        f = Leaf('f')
+        a = 'a'
+        b = 'b'
+        c = 'c'
+        d = 'd'
+        e = 'e'
+        f = 'f'
         t0 = seqnode([b, c])
         t1 = seqnode([a, t0])
-        t2 = mapnode([('eeny', d), ('meeny', e), ('miny', f)])
+        t2 = mapnode([d, e, f])
         t3 = seqnode([t1, t2])
-        nodes = {(0, 1): a,
-                 (1, 2): b,
-                 (2, 3): c,
-                 (3, 15): d,
-                 (15, 17): e,
-                 (17, 21): f,
+        nodes = {# (0, 1): a,
+                 # (1, 2): b,
+                 # (2, 3): c,
+                 # (3, 15): d,
+                 # (15, 17): e,
+                 # (17, 21): f,
                  (0, 21): t3,
                  (0, 3): t1,
                  (1, 3): t0,
                  (3, 21): t2}
         return Tree(t3, weakref.WeakValueDictionary(nodes))
 
-    tree = make_tree(Tree, SeqNode, MapNode)
+    tree = make_tree(Tree, SeqNode, MapNode(['eeny', 'meeny', 'miny']))
     print('Tree tests.')
     print(tree)
     print('Root %s, length %s' % (tree.root, len(tree)))
@@ -483,10 +545,10 @@ if __name__ == '__main__':
         These trees already share a subtree.
 
         """
-        a = Leaf('a')
-        b = Leaf('b')
-        c0 = Leaf('c')
-        c1 = Leaf('d')
+        a = 'a'
+        b = 'b'
+        c0 = 'c'
+        c1 = 'd'
         bc = node([b, c0])
         ab = node([a, b])
         bbc = node([bc, c1])
@@ -495,10 +557,11 @@ if __name__ == '__main__':
         n1 = node([abc0, c1])
         abc1 = node([ab, c0])
         n2 = node([abc1, c1])
-        leaves =  {(0, 1): a,
-                   (1, 2): b,
-                   (2, 3): c0,
-                   (3, 4): c1}
+        leaves =  {# (0, 1): a,
+                   # (1, 2): b,
+                   # (2, 3): c0,
+                   # (3, 4): c1
+        }
         t0 = {(0, 4): n0,
               (1, 4): bbc,
               (1, 3): bc}
@@ -521,10 +584,10 @@ if __name__ == '__main__':
         print('Ambiguous trees, memory:', total_size(ambiguous_trees))
 
     def make_spf(node):
-        a = Leaf('a')
-        b = Leaf('b')
-        c0 = Leaf('c')
-        c1 = Leaf('c')
+        a = 'a'
+        b = 'b'
+        c0 = 'c'
+        c1 = 'c'
         bc = node([b, c0])
         ab = node([a, b])
         bbc = node([bc, c1])
@@ -534,10 +597,10 @@ if __name__ == '__main__':
         abc1 = node([ab, c0])
         abc = PackedNode([abc0, abc1])
         abcc = PackedNode([node([a, bbc]), node([abc, c1])])
-        nodes = {(0, 1): a,
-                 (1, 2): b,
-                 (2, 3): c0,
-                 (3, 4): c1,
+        nodes = {# (0, 1): a,
+                 # (1, 2): b,
+                 # (2, 3): c0,
+                 # (3, 4): c1,
                  (0, 2): ab,
                  (1, 3): bc,
                  (0, 3): abc,

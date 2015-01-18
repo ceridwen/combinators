@@ -1,17 +1,17 @@
 #!/usr/bin/python3
 
-from __future__ import print_function
+from __future__ import absolute_import, division, print_function, unicode_literals
 
 import collections
-import itertools
-import weakref
 # A bug in pprint on 2.7 prevents it from working correctly with
 # frozensets: http://bugs.python.org/issue20192.
 import pprint
+import weakref
+
 try:
-    from functools import singledispatch
+    from functools import singledispatch as _singledispatch
 except ImportError:
-    from singledispatch import singledispatch
+    from singledispatch import singledispatch as _singledispatch
 
 
 class Tree(collections.Sized, collections.Iterable, collections.Container):
@@ -139,11 +139,6 @@ class SharedPackedForest(Tree):
                     unpacked_nodes[packed_node] = node
                 if isinstance(node, Node):
                     to_visit.extend(reversed(node))
-            # Note to self: the problem is here.  What happens is that
-            # root is a PackedNode with a Leaf inside it.  The
-            # iterator creates TreeView objects with the PackedNode as
-            # their root, and the constructor then turns that into a
-            # TreeView with only a Leaf as its root.
             node = root
             while isinstance(node, PackedNode):
                 node = unpacked_nodes[node]
@@ -233,7 +228,7 @@ class TreeView(Tree):
 
 class Visitor(object):
     def __init__(self):
-        self.visit = singledispatch(self.visit)
+        self.visit = _singledispatch(self.visit)
         self.visit.register(Node, self.visit_node)
         self.visit.register(PackedNode, self.visit_packed_node)
 
@@ -263,7 +258,7 @@ class Node(object):
     contain other nodes, other nodes also have to be hashable.  As the
     only built-in Python type with both properties is frozenset and I
     need types with intrinsic order, I have to make my own.
-    Unfortunately, it's impossible to set __hash and __weakref__ on
+    Unfortunately, it's impossible to set _hash and __weakref__ on
     Node, for some reason, they don't inherit correctly.
 
     """
@@ -287,12 +282,12 @@ class SeqNode(list, Node):
     underlying tree representation, or both.
 
     """
-    __slots__ = ('__hash', '__weakref__')
+    __slots__ = ('_hash', '__weakref__')
 
     def __hash__(self):
-        if not hasattr(self, '__hash'):
-            self.__hash = hash(tuple(self))
-        return self.__hash
+        if not hasattr(self, '_hash'):
+            self._hash = hash(tuple(self))
+        return self._hash
 
     def __setitem__(self, *args, **kws):
         raise TypeError("'%s' object does not support item assignment" % type(self))
@@ -322,30 +317,36 @@ class _MapNode(Node):
     namedtuples, to be weak-referenced.  A hash table has memory
     overhead that's too high for the small numbers of objects that
     often occur in parse tree nodes of structured data.  Instead, this
-    class acts something like a C struct, with a fixed set of names
-    defined in __slots__.  While it implements most of the the mapping
-    interface, it is not a proper mapping because it iterates (and
-    reverse iterates) over values, not keys.  Note that attribute
-    access by map_node.a is faster in CPython than access through
-    __getitem__, map_node['a'].
+    class acts something like a namedtuple or C struct, with a fixed
+    set of names defined in __slots__.  While it implements most of
+    the mapping interface, it is not a proper mapping because it
+    iterates (and reverse iterates) over values, not keys.  Note that
+    attribute access by map_node.a is faster in CPython than access
+    through __getitem__, map_node['a'].
 
     """
-    __slots__ = ('__hash', '__weakref__')
+    __slots__ = ('_hash', '__weakref__')
 
     def __init__(self, iterable):
         if len(iterable) < self._length:
             raise TypeError('Expected %d arguments, got %d' % (len(self.__slots__), len(iterable)))
         for key, value in zip(self.__slots__, iterable):
-            setattr(self, key, value)
+            super(_MapNode, self).__setattr__(key, value)
+
+    def __setattr__(self, key, value):
+        raise AttributeError('%s object does not support item assignment.' % type(self).__name__)
+
+    def __delattr__(self, key):
+        raise AttributeError('%s object does not support item deletion.' % type(self).__name__)
 
     def __getitem__(self, key):
         try:
             if key in self.__slots__:
                 return getattr(self, key)
             else:
-                raise KeyError
+                raise KeyError(key)
         except AttributeError:
-            raise KeyError
+            raise KeyError(key)
 
     def __len__(self):
         return len(self.__slots__)
@@ -368,15 +369,12 @@ class _MapNode(Node):
             return default
 
     def copy(self):
-        copy = self.__class__()
-        for  key in self.__slots__:
-            setattr(copy, key, getattr(self, key))
-        return copy
+        return type(self)(self)
 
     def __hash__(self):
-        if not hasattr(self, '__hash'):
-            self.__hash = hash(frozenset(self.items()))
-        return self.__hash
+        if not hasattr(self, '_hash'):
+            super(_MapNode, self).__setattr__('_hash', hash(frozenset(self.items()))) 
+        return self._hash
 
     def __eq__(self, other):
         if not isinstance(other, collections.Mapping):
@@ -472,6 +470,8 @@ if __name__ == '__main__':
     if not pypy:
         import hettinger_total_size
         import functools
+        import itertools
+
         total_size = functools.partial(hettinger_total_size.total_size, handlers = {Tree: lambda t: itertools.chain((t.root,), itertools.chain.from_iterable(t._nodes.items()))})
 
     #                       (0, 21)

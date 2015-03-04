@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-from __future__ import absolute_import, division, print_function, unicode_literals
+from __future__ import absolute_import, division, print_function#, unicode_literals
 
 import collections
 # A bug in pprint on 2.7 prevents it from working correctly with
@@ -226,30 +226,6 @@ class TreeView(Tree):
         return pprint.pformat(nested(self.root))
 
 
-class Visitor(object):
-    def __init__(self):
-        self.visit = _singledispatch(self.visit)
-        self.visit.register(Node, self.visit_node)
-        self.visit.register(PackedNode, self.visit_packed_node)
-
-    def __call__(self, tree, node = None):
-        self.to_visit = [tree.root] if not node else [node]
-        result = None
-        while self.to_visit:
-            node = self.to_visit.pop()
-            result = self.visit(node, result)
-        return result
-            
-    def visit(self, node, result):
-        pass
-
-    def visit_node(self, node, result):
-        self.to_visit.extend(reversed(node))
-
-    def visit_packed_node(self, node, result):
-        self.to_visit.extend(node)
-
-
 class Node(object):
     """Abstract parent class for nodes.
 
@@ -364,7 +340,7 @@ class _MapNode(Node):
 
     def get(self, key, default = None):
         if key in self.__slots__:
-            return getattr(self, key, defauilt)
+            return getattr(self, key, default)
         else:
             return default
 
@@ -621,8 +597,6 @@ if __name__ == '__main__':
             print('Subtree:', s)
         for i in t.leaves():
             print('Leaf:', i)
-    visitor = Visitor()
-    visitor(spf)
 
     if not pypy:
         print('Input, memory in bytes:', total_size('abcc'))

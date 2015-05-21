@@ -1124,6 +1124,24 @@ possible way with no dispatch to supertypes at all.
 \section{Notes}
 \label{sec:notes}
 
+\subsection{Type Checking}
+\label{sec:type_checking}
+
+Ideally combinators should fail as soon as someone attempts to combine
+combinators that process data of different types (Unicode/text and
+binary data, at the moment) or parse data of an inappropriate type for
+a given combinator, rather than failing deep into parsing.
+Unfortunately, two things make this difficult: mutually recursive
+functions create cycles in the digraph through which types propagate,
+and lazy evaluation of combinators makes it hard to analyze types at
+class instantiation time.  A correct solution to this problem is
+almost certainly going to involve using one of the existing
+type-checking/type-inference algorithms, and it might make sense to
+outsource it to something like mypy.  Arguably, it isn't in the spirit
+of Python's dynamic type system since it involves a form of static
+analysis, though the addition of gradual typing to 3.5 undermines this
+argument.
+
 \subsection{Yakker SPPF}
 \label{sec:yakker_sppf}
 

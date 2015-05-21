@@ -267,8 +267,9 @@ class Lazy(Combinator):
     combinator = property(combinator)
 
     def _parse(self, stream, offset):
-        self._parse = self.combinator._parse
-        return self.combinator._parse(stream, offset)
+        combinator = self.combinator
+        self._parse = combinator._parse
+        return combinator._parse(stream, offset)
 
 
 class Action(Combinator):

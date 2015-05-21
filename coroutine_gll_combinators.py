@@ -16,11 +16,12 @@ try:
 except ImportError:
     from singledispatch import singledispatch as _singledispatch
 
-from keyword_only_args.decorator_closure import keyword_only_args
+from keyword_only_args import decorator_factory as keyword_only_args
 
 
 import abc
-# Counter is only in 2.7, but Hettinger has a recipe for 2.5 on his page.
+# Counter is only in 2.7, but Hettinger has a backport for 2.5:
+# http://code.activestate.com/recipes/576611/
 import collections
 import functools
 import itertools
@@ -28,6 +29,12 @@ import weakref
 
 
 from spf import Node, SeqNode, PackedNode, Leaf, SharedPackedForest, TreeView
+
+
+# Terminal-specific imports currently in the class definitions.  They
+# may have to be moved to __init__() to allow people to import the
+# module without getting errors using 'import combinators' rather than
+# 'from combinators import <class>'.
 
 
 class ParseError(Exception):
@@ -63,7 +70,7 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
     # and not something I can do anything about.
 
     # Testing on 3.4 and 2.7 suggests that struct doesn't actually
-    # care what it's given, bytes, str, or unicode, but enforcing
+7    # care what it's given, bytes, str, or unicode, but enforcing
     # consistency on its input won't hurt.  array accepts *only*
     # native strings, so str/bytes on Python 2 and str/unicode on
     # Python 3.
@@ -73,13 +80,13 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
 
     if six.PY3:
         _DATA_TYPES = {str: DataType.text,
-                      bytes: DataType.binary,
-                      bytearray: DataType.binary,
-                      memoryview: DataType.binary}
+                       bytes: DataType.binary,
+                       bytearray: DataType.binary,
+                       memoryview: DataType.binary}
     else:
         _DATA_TYPES = {str: DataType.binary,
-                      unicode: DataType.text,
-                      memoryview: DataType.binary}
+                       unicode: DataType.text,
+                       memoryview: DataType.binary}
 
     @abc.abstractmethod
     @keyword_only_args()
@@ -87,7 +94,8 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
         self._check_args(args)
         self._data_type = self._inherit_data_type(args)
 
-    def _check_args(self, args, arg_type=Combinator):
+    def _check_args(self, args):
+        arg_type=Combinator
         if len(args) == 0:
             raise TypeError('%s takes at least 1 argument.' % type(self).__name__)
         if any(not isinstance(c, arg_type) for c in combinators):
@@ -246,7 +254,7 @@ class Strings(Terminal):
 class Regex(Terminal):
     import re
     # Consider seeing if it's possible to implement a weak-value defaultdict
-    __regexes_cache = defaultdict(re.compile) # weakref.WeakValueDictionary()
+    __regexes_cache = collections.defaultdict(re.compile) # weakref.WeakValueDictionary()
 
     @keyword_only_args()
     def __init__(self, name=None, Node=SeqNode, *patterns, **kws):
@@ -289,8 +297,8 @@ class Regex(Terminal):
 class Binary(Terminal):
     import struct
     import numbers # For format string algebra
-    __structs_cache = defaultdict(struct.Struct) # weakref.WeakValueDictionary()
-    _data_type = self.DataType.binary
+    __structs_cache = collections.defaultdict(struct.Struct) # weakref.WeakValueDictionary()
+    _data_type = Combinator.DataType.binary
 
     @keyword_only_args()
     def __init__(self, name=None, Node=SeqNode, *format_strs, **kws):
@@ -469,11 +477,11 @@ class Binary(Terminal):
 
         def _add_seq(self, other):
             return type(self)(*(self._atoms + other._atoms))
-        def _add_atom(self, other)
+        def _add_atom(self, other):
             return type(self)(*(self._atoms + [other]))
         def _radd_seq(self, other):
             return type(self)(*(other._atoms + self._atoms))
-        def _radd_atom(self, other)
+        def _radd_atom(self, other):
             return type(self)(*([other] + self._atoms))
         def _iadd_seq(self, other):
             self._atoms.extend(other._atoms)
@@ -533,7 +541,7 @@ class Binary(Terminal):
                 self._atoms *= other
                 return self
 
-        __rmul__ = __mul__
+        # __rmul__ = __mul__
 
     class _StructAtom(_StructBase):
         __slots__ = ('length', 'count', 'character')
@@ -582,8 +590,8 @@ class Binary(Terminal):
 
 class Bits(Terminal):
     import bitstring
-    __bitstrings_cache = defaultdict(functools.partial(functools.partial(bitstring.Bits))) # weakref.WeakValueDictionary()
-    _data_type = self.DataType.binary
+    __bitstrings_cache = collections.defaultdict(functools.partial(functools.partial(bitstring.Bits))) # weakref.WeakValueDictionary()
+    _data_type = Combinator.DataType.binary
 
     @keyword_only_args()
     def __init__(self, name=None, Node=SeqNode, *lengths, **kws):
@@ -596,7 +604,7 @@ class Bits(Terminal):
         self.__bytes_length = sum(lengths)
         if self.__bytes_length % 8 != 0:
             raise TypeError('Sum of length of bit fields must be a multiple of 8.')
-        self.__bitstrings_lengths = [self.__structs_cache[l], l for l in lengths]
+        self.__bitstrings_lengths = [self.__bitstrings_cache[l] for l in lengths]
         self._parsers = [self.__parse]
 
     def __parse(self, stream, bytes_offset):

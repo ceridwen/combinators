@@ -19,8 +19,47 @@
 
 \maketitle
 
+\section{Overview}
+\label{sec:overview}
+
+The big idea behind this library is to combine techniques from the
+parsing literature, some new, some old and neglected, to create a
+library that can compete with hand-written recursive-descent parsers.
+The key advantages that hand-written recursive-descent parsers have
+over traditional LALR parser generators are simplicity, handling a
+broader range of grammars, better error reporting, and easier
+introduction of custom code.  A well-designed library can have most of
+these, too, and some advantages over a recursive-descent parser, at
+the cost of an implementation that isn't as simple.
+
+\begin{itemize}
+\item Parser combinators make parsers easier to learn and write by
+  embedding a parsing library into a general-purpose programming
+  language, making it easy to add custom code to the parser and not
+  requiring that anyone learn a DSL like EBNF or formal grammars.
+\item GLL parsing can parse any CFG, including ambiguous and
+  left-recursive grammars, in $O(n^3)$ time, and unambiguous grammars
+  in linear time, all while remaining top-down depth-first like
+  recursive descent and thus easier to understand and debug.
+\item Attribute grammars can allow the insertion of arbitrary code
+  into the parsing process, principally allowing the parsing of
+  context-sensitive grammars that a general CFG algorithm can't handle
+  alone, and with the data-dependent grammar restrictions, parse them
+  in $O(n^3)$ time.  They also provide an easy mechanism for adding
+  semantic actions.
+\item Non-correcting error handling can locate and provide reasonable
+  messages for possible errors in an input string without
+  providing any spurious messages.
+\item Metaprogramming techniques like macros or staging can make
+  parser combinators almost as efficient as recursive descent.
+\item Attribute grammars can be inverted to allow writing both a
+  parser and an unparser at the same time.
+\end{itemize}
+
+
 \section{Design Decisions}
 \label{sec:design_decisions}
+
 
 \subsection{Grammars}
 \label{sec:grammar}
@@ -146,7 +185,11 @@ options, treating them as alternatives, when encountering a constraint
 based on a variable that has yet to be defined.
 
 % TODO: work out the reverse language for a DDG and figure out
-% something to say about it here.
+% something to say about it here.  Also work out a formal notion of
+% undefined for attributes: if a constraint tries to access an
+% undefined attribute, it falls back to parsing all alteratives.  If a
+% attribute function receives an undefined attribute as an input, it
+% always returns undefined.
 
 The two major alternatives I considered were PEGs and Boolean
 grammars.  They both have the disadvantage that to parse arbitrary
@@ -229,7 +272,6 @@ secondary reason to avoid it.
 \subsection{Error Recovery}
 \label{sec:errors}
 
-
 For error handling I'm using Richter's non-correcting error recovery.
 When parsing binary data, one major problem with finding errors is
 that the point where the parser fails is often not the point where the
@@ -245,6 +287,21 @@ using GLL, I can use the same algorithm for both normal parsing and
 error-handling.
 
 
+\subsection{Architecture}
+\label{sec:architecture}
+
+The reason to write my own library in Python rather than using
+Libmarpa CFFI bindings is to support Python variants.  CFFI only works
+to allow calls from the interpreter level to C functions, not RPython
+to C.  Meanwhile, Jython and IronPython don't, as far as I know, have
+anything to allow calling into C at all.  Writing it in Python with
+metaprogramming to convert it to RPython will make it
+platform-independent. Also worth noting is that after seeing the
+performance benchmarks for Scala parser combinators with macros and
+staging, I'm skeptical that it's necessary to write a parsing library
+in a low-level language to get good performance, and that the kind of
+code that's fast doesn't change much from interpreter to interpreter:
+it's all simple, imperative-style code with obvious optimizations.
 
 
 \section{Implementation Order}
@@ -255,8 +312,9 @@ error-handling.
 \item Non-correcting error recovery, for debugging.
 \item Tests.
 \item Performance benchmarks.
+\item Macros, staging, or other metaprogramming for performance.
 \item Data-dependent grammar functionality, in some as yet TBD order.
-\item Transducers and other forms of compilation.
+\item Unparsing.
 \end{enumerate}
 
 

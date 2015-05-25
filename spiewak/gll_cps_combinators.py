@@ -1,15 +1,5 @@
 #!/usr/bin/python3
 
-# import logging
-# logging.basicConfig(filename='temp.txt', level=logging.DEBUG)
-
-# apply_log = '{} apply() called: {}'
-# chain_log = '{} chain() called:\n    {}\n    Stream: {}\n    Continuation: {}'
-
-# import tracecalls
-
-# {j.__closure__[0].cell_contents for i in t.backlinks[b'121212'].values() for j in i}
-
 # There are major unfinished elements of this implementation, some
 # left unfinished by Spiewak, some by me.
 
@@ -275,7 +265,7 @@ class NonTerminalSequentialParser(NonTerminalParser):
         self.right = right
 
     # @tracecalls.TraceCalls(show_ret=True)
-    def chain(t, stream, f):
+    def chain(self, t, stream, f):
         # logging.debug(chain_log.format(type(self).__name__, str(t), stream, f))
         def continuation_factory(continuation):
             # @tracecalls.TraceCalls(show_ret=True)
@@ -283,8 +273,8 @@ class NonTerminalSequentialParser(NonTerminalParser):
                 if isinstance(res1, Success):
                     # @tracecalls.TraceCalls(show_ret=True)
                     def continuation2(res2):
-                        if instance(res2, Success):
-                            return continuation(Success(res1.value, res2.value), res2.tail)
+                        if isinstance(res2, Success):
+                            return continuation(Success((res1.value, res2.value), res2.tail))
                         else:
                             return continuation(res2)
                     return self.right.chain(t, res1.tail, continuation2)
@@ -394,6 +384,8 @@ class LiteralParser(TerminalParser):
                 return Failure('Expected "{}" got "{}"'.format(self.value, stream[:length]))
 
 if __name__ == '__main__':
+    import cProfile
+    import timeit
     # l =
     # '====================================================================='
 
@@ -401,79 +393,28 @@ if __name__ == '__main__':
     # complete because the only parser that will ever return
     # "Unexpected trailing characters" is a non-terminal parser.
     parser = LiteralParser(b'01')
-    print('Combinators,', parser.apply(b'010101'))
-    print('Combinators,', parser.apply(b'121212'))
+    # print('Combinators,', parser.apply(b'010101'))
+    # print('Combinators,', parser.apply(b'121212'))
     # logging.debug(l)
     parser = TerminalSequentialParser(LiteralParser(b'0'), LiteralParser(b'1'))
-    print('Combinators,', parser.apply(b'010101'))
+    # print('Combinators,', parser.apply(b'010101'))
     # logging.debug(l)
     parser = DisjunctiveParser(LiteralParser(b'01'), LiteralParser(b'12'))
-    print('Combinators,', parser.apply(b'121212'))
+    # print('Combinators,', parser.apply(b'121212'))
     # logging.debug(l)
     parser = LiteralParser(b'0') + LiteralParser(b'1')
-    print('Combinators,', parser.apply(b'010101'))
+    # print('Combinators,', parser.apply(b'010101'))
     # logging.debug(l)
     parser = LiteralParser(b'01') | LiteralParser(b'12')
-    print('Combinators,', parser.apply(b'121212'))
-
-
-# SINGLE-DISPATCH SETUP
-
-# class Parser:
-#     def apply(self, stream):
-#         raise NotImplementedError
-#     def chain(self, t, stream, f):
-#         raise NotImplementedError
-
-# class NonTerminalParser(Parser):
-#     def __init__():
-#         self._continuation = singledispatch(self._continuation)
-#         self._continuation.register(Success, self._success)
-#         self._continuation.register(Failure, self._failure)
-#     def apply(self, stream):
-#         t = Trampoline()
-#         # Spiewak implements this method using currying and an
-#         # anonymous pattern-matching function.  The syntax for this in
-#         # Scala is an example of how bizarre Scala is: you can call a
-#         # function using parentheses as normal, but there's also a
-#         # special notation called infix notation that allows eliding
-#         # of parentheses when calling higher-order functions.  (This
-#         # is a *convention* not a hard rule, which makes it possible
-#         # to write even more confusing code, but the general
-#         # complications of infix notation are beyond this short note.)
-#         # In the Scala code, the partial version of chain returns a
-#         # function that then acts on an anonymous pattern-matching
-#         # function.  Python lambdas aren't powerful enough compared to
-#         # Scala anonymous functions so I need to name the function.
-#         functools.partial(self.chain, t, stream)(self._continuation)
-#         t.run()
-#         # somehow creates a list of Results
-#     def _continuation(self, result):
-#         raise NotImplementedError
-#     def _success(self, result):
-#         raise NotImplementedError
-#     def _failure(self, result):
-#         raise NotImplementedError
-
-# # Non-terminal version
-# class NonTerminalSequentialParser(NonTerminalParser):
-#     def __init__(self, left, right):
-#         super().__init__()
-#         self._success_continuation = singledispatch(self._succcess_continuation)
-#         self._success_continuation.register(Success, self._success_success)
-#         self._success_continuation.register(Failure, self._failure)
-#         self.left = left
-#         self.right = right
-#     def chain(t, stream, f):
-#         functools.partial(self.left.chain, t, stream)(self._continuation)
-#     def _continuation(self, result):
-#         raise NotImplementedError
-#     def _success(self, result):
-#         functools.partial(self.right.chain, t, stream)(self._success_continuation)
-#     def _success_continuation(self, result):
-#         raise NotImplementedError
-#     def _success_success(self, result):
-        
-#     def _failure(self, result):
-#         return f(result)
-
+    # print('Combinators,', parser.apply(b'121212'))
+    # Ugly hack to work around the lack of forward reference support
+    # in this prototype
+    parser = DisjunctiveParser(0, 0)
+    parser.alternates = [parser + parser + parser, parser + parser, LiteralParser(b'a')]
+    # print('Highly ambiguous,', parser.apply(b'aaaa'))
+    for i in range(2, 10):
+        print(i, timeit.timeit('parser.apply(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
+#     cProfile.run('''
+# for i in range(2, 10):
+#     print(timeit.timeit('parser.apply(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
+# ''')

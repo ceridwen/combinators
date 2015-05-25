@@ -4,10 +4,8 @@ from __future__ import absolute_import, division, print_function
 
 import abc
 import inspect
-import numbers
 import re
 import struct
-import sys
 
 import six
 
@@ -133,10 +131,7 @@ class Sequence(Combinator):
         else:
             return Sequence(*((other,) + self.combinators))
     def __mul__(self, other):
-        if isinstance(other, (int, numbers.Integer)):
-            type(self)(*(other * self.combinators))
-        else:
-            return NotImplemented
+        type(self)(*(other * self.combinators))
     __rmul__ = __mul__
 
 

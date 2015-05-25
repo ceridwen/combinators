@@ -184,12 +184,12 @@ another DDG, with one wrinkle: the parser always has to take all
 options, treating them as alternatives, when encountering a constraint
 based on a variable that has yet to be defined.
 
-% TODO: work out the reverse language for a DDG and figure out
-% something to say about it here.  Also work out a formal notion of
-% undefined for attributes: if a constraint tries to access an
-% undefined attribute, it falls back to parsing all alteratives.  If a
-% attribute function receives an undefined attribute as an input, it
-% always returns undefined.
+TODO: work out the reverse language for a DDG and figure out
+something to say about it here.  Also work out a formal notion of
+undefined for attributes: if a constraint tries to access an
+undefined attribute, it falls back to parsing all alteratives.  If a
+attribute function receives an undefined attribute as an input, it
+always returns undefined.
 
 The two major alternatives I considered were PEGs and Boolean
 grammars.  They both have the disadvantage that to parse arbitrary
@@ -232,6 +232,54 @@ like error handling.
 \subsection{Algorithms}
 \label{sec:algorithms}
 
+TODO: Reach a new decision here.
+
+On closer analysis, there are two major questions about algorithm
+performance.  First, while the worst-case performance for all general
+CFG algorithms is $O(n^3)$, the set of grammars which they can handle
+in linear time differs.  One notable advantage of Earley's algorithm
+is that with Leo's modifications it can parse all LR-regular languages
+in linear time \parencites{leo, marpa}, and the set of LR-regular
+languages contains the deterministic languages \parencite{lr-regular}.
+Leo accomplishes this by memoizing certain cases of right recursion
+that would otherwise take $O(n^2)$.  It's not clear to me what
+grammars GLL can handle in linear time.  Scott and Johnstone claim
+GLL, ``runs in linear time on LL grammars and which also allows
+grammar rule factorisation, with consequential speed
+up'' \parencite{gll1}, which could mean that GLL runs in linear time
+on all LL($k$) for all $k$, but that set is a proper subset of the
+deterministic grammars.  However, Spiewak says, ``Thus, the class of
+grammars which can be handled by GLL in O(n) time is precisely
+equivalent to LL(1)'' \parencite{spiewak}, which is a much smaller set
+than all LL($k$) grammars.  Both of these sets are much smaller than
+the LR-regular grammars.  ANTLR3 and ANTLR4 run in linear time on a
+set the authors call LL(*) \parencites{antlr3, antlr4}, which I think
+is equivalent to LL-regular, more or less by directly using DFAs to
+predict which alternative to pick.  It's possible the same approach
+might work for GLL to allow it to run in linear time on LL-regular
+grammars, though LL-regular is a proper subset of the LR-regular
+grammars\parencite{ll-regular}.
+
+The second question involves constant factors.  There are conflicting
+reports in the literature about how different parsing algorithms
+compare to each other.  The most extensive comparison of modern
+parsing algorithms is in \textcite{antlr4}, where the authors
+benchmark their ALL(*) algorithm against GLR, GLL, packrat/PEG, and
+hand-written recursive-descent implementations as well as some others.
+On their test case, Java code, all of the specialized parsers were
+much faster than the general parsers, by orders of magnitude in some
+cases, with Rascal's GLL parser performing particularly poorly.  They
+don't directly compare their algorithm against an Earley parser but
+state that \textcite{tomita1985efficient} ``shows GLR to be 5x-10x
+faster than Earley.''  It's unclear where this penalty comes from, and
+it should be noted the comparison may no longer be valid because
+Tomita compared the algorithms before Leo published his modifications
+that make Earley run in linear time on LR-regular grammars.  This
+still seems to be the general impression about Earley versus GLR, but
+I haven't seen any evidence backing it up outside Tomita's work.
+
+
+
 The backend parsing algorithm will be GLL modified to include the
 DDG/L-AG features.  While Valiant's algorithm, which is based on the
 CYK algorithm and Boolean matrix multiplication, has the best known
@@ -250,14 +298,7 @@ Earley is the clear runner-up here, since there exist implementations
 of it using parser combinators and efficient theoretical developments
 of the algorithm that include all the key features I want like SPPF
 creation.  The original DDG paper \textcite{yakker1} implements DDGs
-on top of Earley's algorithm.  One notable advantage of Earley's
-algorithm is that modern versions of the algorithm can parse all
-LR-regular languages in linear time \parencite{marpa}, and the set of
-LR-regular languages is larger than the set of deterministic
-languages\parencite{lr-regular}, while as far as I know GLL can only
-parse the deterministic languages in linear time.  I don't know if
-it's possible to modify the algorithm so it can handle the LR-regular
-languages in linear time.
+on top of Earley's algorithm.
 
 As far as I know, there are no parser combinators for bottom-up
 parsers like GLR, and bottom-up depth-first algorithms are harder to

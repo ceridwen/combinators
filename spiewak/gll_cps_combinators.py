@@ -18,7 +18,6 @@
 
 class Result:
     pass
-
 class Success(Result):
     def __init__(self, value, tail):
         self.value = value
@@ -386,6 +385,9 @@ class LiteralParser(TerminalParser):
 if __name__ == '__main__':
     import cProfile
     import timeit
+    import tracemalloc
+    tracemalloc.start()
+
     # l =
     # '====================================================================='
 
@@ -412,9 +414,16 @@ if __name__ == '__main__':
     parser = DisjunctiveParser(0, 0)
     parser.alternates = [parser + parser + parser, parser + parser, LiteralParser(b'a')]
     # print('Highly ambiguous,', parser.apply(b'aaaa'))
-    for i in range(2, 10):
+    for i in range(2, 11):
         print(i, timeit.timeit('parser.apply(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
 #     cProfile.run('''
 # for i in range(2, 10):
 #     print(timeit.timeit('parser.apply(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
 # ''')
+
+    snapshot = tracemalloc.take_snapshot()
+    top_stats = snapshot.statistics('lineno')
+
+    print("[ Top 10 ]")
+    for stat in top_stats[:10]:
+        print(stat)

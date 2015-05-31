@@ -70,7 +70,7 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
     # and not something I can do anything about.
 
     # Testing on 3.4 and 2.7 suggests that struct doesn't actually
-7    # care what it's given, bytes, str, or unicode, but enforcing
+    # care what it's given, bytes, str, or unicode, but enforcing
     # consistency on its input won't hurt.  array accepts *only*
     # native strings, so str/bytes on Python 2 and str/unicode on
     # Python 3.
@@ -114,8 +114,7 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
     def __add__(self, other):
         """ + is the operator Python uses for concatenation."""
         return Sequence(self, other)
-    def __radd__(self, other):
-        return Sequence(other, self)
+    def __radd__(self,         return Sequence(other, self)
     def __or__(self, other):
         return Alternation(self, other)
     def __ror__(self, other):

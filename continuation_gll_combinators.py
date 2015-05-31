@@ -10,6 +10,17 @@ import struct
 import six
 
 
+# TODO: properly segregate the GSS in its own data structure
+
+# rewrite this with the faster GSS modifications.
+
+# SPPF
+
+# Replace copying of stream data with indices
+
+# Rewrite the continuations as classes and *profile*.
+
+
 class Cache(dict):
     def __init__(self, factory, *args, **kws):
         self.factory = factory
@@ -26,7 +37,38 @@ class Cache(dict):
 def read_only(value):
     return property(lambda g: value)
 
-    
+
+# Success = collections.namedtuple('Success', 'node label offsets')
+
+# Failure = collections.namedtuple('Failure', 'msg offset')
+
+# Label = collections.namedtuple('Label', 'combinator start end')
+
+# DEFAULT_FAILURE = Failure('This is the default failure for combinators that cannot generate their own failures.  It should never be returned.', -1)
+
+
+class Result:
+    pass
+class Success(Result):
+    def __init__(self, value, tail):
+        self.value = value
+        self.tail = tail
+    def copy(self):
+        return Success(self.value, self.tail)
+    def __str__(self):
+      return 'Success: ' + str(self.value) + ', ' + str(self.tail)
+    __repr__ = __str__
+
+class Failure(Result):
+    def __init__(self, msg):
+        self.msg = msg
+    def copy(self):
+        return Failure(self.msg)
+    def __str__(self):
+        return 'Failure: ' + self.msg
+    __repr__ = __str__
+
+
 class Combinator(six.with_metaclass(abc.ABCMeta, object)):
     # Since combinators pass the same input stream among themselves,
     # to avoid generating runtime errors due to passing text to
@@ -53,15 +95,17 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
     # Python 3.
     @abc.abstractmethod
     def __init__(self, arg_type, *combinators, **kws):
+        # print(self, arg_type, combinators, kws)
         if len(combinators) == 0:
-            raise TypeError('%s takes at least 1 argument.' % self.__name__)
+            raise TypeError('%s takes at least 1 argument.' % type(self).__name__)
         if any(not isinstance(c, arg_type) for c in combinators):
-            raise TypeError('Arguments to %s must be %ss.' % (self.__name__, arg_type.__name__))
+            raise TypeError('Arguments to %s must be %ss.' % (type(self).__name__, arg_type.__name__))
 
-    def __setattr__(self, key, value):
-        raise AttributeError('%s object does not support item assignment.' % self.__name__)
-    def __delattr__(self, key):
-        raise AttributeError('%s object does not support item deletion.' % self.__name__)
+    # Temporarily disabled until GSS segregation
+    # def __setattr__(self, key, value):
+    #     raise AttributeError('%s object does not support item assignment.' % type(self).__name__)
+    # def __delattr__(self, key):
+    #     raise AttributeError('%s object does not support item deletion.' % type(self).__name__)
 
     def __add__(self, other):
         """ + is the operator Python uses for concatenation."""
@@ -77,11 +121,80 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
         as any."""
         return Action(self, act)
 
-    def parse(self, stream, offset=0):
-        pass
+    def parse(self, stream):
+        successes = set()
+        failures = set()
+        # @tracecalls.TraceCalls(show_ret=True)
+        def nonterminal_continuation(result):
+            if isinstance(result, Success):
+                # if result.tail:
+                #     failures.add(Failure('Unexpected trailing characters: "{}"'.format(str(result.tail))))
+                # else:
+                successes.add(result)
+            else:
+                failures.add(result)
+
+        self.stack = []
+        # A map of a stream position to a map mapping combinator instances
+        # to sets of continuations.
+        self.backlinks = {}
+        # A map of a stream position to sets of combinators.
+        self.done = {}
+        # A map of a stream position to a map mapping combinator instances
+        # to sets of successes.
+        self.popped = {}
+        # A map of Results to sets of functions.
+        self.saved = {}
+
+        self._parse(self, stream, nonterminal_continuation)
+
+        while self.stack:
+            # logging.debug('Trampoline run() looped.')
+            # print(self.stack)
+            combinator, stream = self.stack.pop()
+            def continuation_factory(combinator, stream):
+                # @tracecalls.TraceCalls(show_ret=True)
+                def trampoline_continuation(result):
+                    if stream not in self.popped:
+                        self.popped[stream] = {}
+                    if combinator not in self.popped[stream]:
+                        self.popped[stream][combinator] = set()
+                    if isinstance(result, Success):
+                        self.popped[stream][combinator].add(result)
+                    if result not in self.saved:
+                        self.saved[result] = set()
+                    for f in self.backlinks[stream][combinator]:
+                        if f.__code__ not in {i.__code__ for i in self.saved[result]}:
+                            self.saved[result].add(f)
+                            f(result)
+                return trampoline_continuation
+            combinator._parse(self, stream, continuation_factory(combinator, stream))
+
+        if successes:
+            return list(successes)
+        else:
+            return list(failures)
+
+    def add(self, combinator, stream, continuation):
+        # logging.debug('Trampoline add() called:\n    Parser: {}\n    Stream: {}\n    Continuation: {}'.format(parser, stream, continuation))
+        if stream not in self.backlinks:
+            self.backlinks[stream] = {}
+        if combinator not in self.backlinks[stream]:
+            self.backlinks[stream][combinator] = set()
+        if continuation.__code__ not in {i.__code__ for i in self.backlinks[stream][combinator]}:
+            self.backlinks[stream][combinator].add(continuation)
+        if stream in self.popped and combinator in self.popped[stream]:
+            for result in self.popped[stream][combinator]:
+                continuation(result)
+        else:
+            if stream not in self.done:
+                self.done[stream] = set()
+            if combinator not in self.done[stream]:
+                self.stack.append((combinator, stream))
+                self.done[stream].add(combinator)
 
     @abc.abstractmethod
-    def _parse(self, stream, sppf, offset):
+    def _parse(self, trampoline, stream, continuation):
         raise NotImplementedError
 
     def unparse(self, tree, stream, offset=0):
@@ -92,33 +205,62 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
 
 
 class Alternation(Combinator):
-    combinators = read_only_instance('combinators')
-
     def __init__(self, *combinators, **kws):
-        super(Alternation, self).__init__(arg_type=Combinator, *combinators, **kws)
-        vars(self)['combinators'] = frozenset(*combinators)
+        super(Alternation, self).__init__(Combinator, *combinators, **kws)
+        vars(self)['combinators'] = frozenset(combinators)
 
-    def _parse(self, stream, offset):
-        pass
+    def _parse(self, trampoline, stream, continuation):
+        results = set()
+        def continuation_factory(continuation):
+            # @tracecalls.TraceCalls(show_ret=True)
+            def alternation_continuation(result):
+                if result not in results:
+                    continuation(result)
+                    results.add(result)
+            return alternation_continuation
+        for combinator in self.combinators:
+            trampoline.add(combinator, stream, continuation_factory(continuation))
 
     def __or__(self, other):
         if isinstance(other, Alternation):
             return Alternation(*(self.combinators | other.combinators))
         else:
-            return Alternation(*(self.combinators | frozenset(other)))
+            return Alternation(*(self.combinators | frozenset([other])))
     def __ror__(self, other):
         if isinstance(other, Alternation):
             return Alternation(*(other.combinators | self.combinators))
         else:
-            return Alternation(*(frozenset(other) | self.combinators))
+            return Alternation(*(frozenset([other]) | self.combinators))
 
 
 class Sequence(Combinator):
-    combinators = read_only_instance('combinators')
-
     def __init__(self, *combinators, **kws):
-        super(Sequence, self).__init__(arg_type=Combinator, *combinators, **kws)
+        super(Sequence, self).__init__(Combinator, *combinators, **kws)
         vars(self)['combinators'] = combinators
+
+    def _parse(self, trampoline, stream, continuation):
+        results = []
+        iterator = iter(self.combinators)
+        # logging.debug(chain_log.format(type(self).__name__, str(t), stream, continuation))
+        def continuation_factory(continuation):
+            # The clean way to do is with a separate index variable,
+            # but Python 2.7 doesn't allow an inner function to alter
+            # the variable of an outer one.  The proper way of working
+            # around this is probably using classes instead of
+            # closures because classes have mutable state.
+            # @tracecalls.TraceCalls(show_ret=True)
+            def sequence_continuation(result):
+                if isinstance(result, Success):
+                    results.append(result)
+                    try:
+                        combinator = next(iterator)
+                    except StopIteration:
+                        return continuation(Success([r.value for r in results], results[-1].tail))
+                    combinator._parse(trampoline, result.tail, sequence_continuation)
+                else:
+                    continuation(result)
+            return sequence_continuation
+        next(iterator)._parse(trampoline, stream, continuation_factory(continuation))
 
     def __add__(self, other):
         if isinstance(other, Sequence):
@@ -133,98 +275,6 @@ class Sequence(Combinator):
     def __mul__(self, other):
         type(self)(*(other * self.combinators))
     __rmul__ = __mul__
-
-
-class Terminal(Sequence):
-    """This inherits from Sequence: note that there's no real distinction
-    between a sequence of terminals and a single terminal.
-
-    Parsers have a type of input they expect, and you can't mix
-    parsers that accept different kinds of input.  Note this is
-    different from passing output to a subparser using Act/>>.
-
-    """
-    def __init__(self, *combinators, **kws):
-        # TODO: should rework this to not hard-code Combinator
-        Combinator.__init__(arg_type=Terminal, *combinators, **kws)
-        vars(self)['combinators'] = combinators
-
-    def __add__(self, other):
-        if isinstance(other, Terminal):
-            if type(self) is Terminal and type(other) is Terminal:
-                return Terminal(*(self.combinators + other.combinators))
-            elif type(self) is Terminal:
-                return Terminal(*(self.combinators + (other,)))
-            elif type(other) is Terminal:
-                return Terminal(*((self,) + other.combinators))
-            else:
-                return Terminal(self, other)
-        else:
-            return NotImplemented
-
-    def __radd__(self, other):
-        if isinstance(other, Terminal):
-            if type(self) is Terminal and type(other) is Terminal:
-                return Terminal(*(other.combinators + self.combinators))
-            elif type(self) is Terminal:
-                return Terminal(*((other,) + self.combinators))
-            elif type(other) is Terminal:
-                return Terminal(*(other.combinators) + (self,))
-            else:
-                return Terminal(other, self)
-        else:
-            return NotImplemented
-
-    def _parse(self, stream, sppf, offset):
-        pass
-
-
-class Strings(Terminal):
-    def __init__(self, *strings, **kws):
-        vars(self)['strings_lengths'] = [(s, len(s)) for s in strings]
-
-    def _parse(self, stream, offset):
-        start = offset
-        strings = []
-        for string, length in self.strings_lengths:
-            if (offset + length > len(stream)):
-                return Failure('Unexpected end of stream (expected "%s")' % string, start)
-            else:
-                if stream.startswith(string, offset):
-                    strings.append(string)
-                    offset += length
-                else:
-                    return Failure('Expected "%s" got "{}"' % string, start)
-        return (strings, offset)
-    
-
-class Regex(Terminal):
-    regexes = read_only(Cache(re.compile))
-
-    def __init__(self, pattern, **kws):
-        vars(self)['regex'] = self.regexes[pattern]
-
-    def _parse(self, stream, offset):
-        match = self.regex.match(stream, offset)
-        if match:
-            return [Success(match.groups(), stream, match.end())]
-        else:
-            return Failure("'%s' didn't match '{}'" % self.regex.pattern,
-                           (), stream, offset)
-
-
-class Binary(Terminal):
-    structs = read_only(struct.Struct)
-
-    def __init__(self, format_string, **kws):
-        vars(self)['struct'] = self.structs[format_string]
-
-    def _parse(self, stream, offset):
-        try:
-            [Success(self.struct.unpack_from(stream, offset),
-                    stream, offset + self.struct.size)]
-        except struct.error as error:
-            return Failure(error.args[0], stream, offset)
 
 
 class Lazy(Combinator):
@@ -261,25 +311,181 @@ class Lazy(Combinator):
 
     combinator = property(combinator)
 
-    def _parse(self, stream, offset):
+    # def parse(self, stream):
+
+    def _parse(self, trampoline, stream, continuation):
         combinator = self.combinator
         self._parse = combinator._parse
-        return combinator._parse(stream, offset)
+        return combinator._parse(trampoline, stream, continuation)
 
 
 class Action(Combinator):
-    def __init__(self, combinator, action, name=None):
+    def __init__(self, combinator, action):
         self.combinator = combinator
         self.action = action
-        self.name = name
 
-    def _parse(self, stream, offset):
-        result = self.combinator._parse(stream, offset)
-        if isinstance(result, types.GeneratorType):
-            result = (yield from result)
-        if result:
-            return [Success(self.action(s.tree), stream, s.offset)
-                    for s in result]
+    def _parse(self, trampoline, stream, continuation):
+        def continuation_factory(continuation):
+            def action_continuation(result):
+                if isinstance(result, Success):
+                    return continuation(Success(self.action(result.value), result.tail))
+                else:
+                    return continuation(result1)
+            return action_continuation
+        self.combinator._parse(trampoline, stream, continuation_factory(continuation))
+
+
+class Terminal(Sequence):
+    """This inherits from Sequence: note that there's no real distinction
+    between a sequence of terminals and a single terminal.
+
+    Parsers have a type of input they expect, and you can't mix
+    parsers that accept different kinds of input.  Note this is
+    different from passing output to a subparser using Act/>>.
+
+    """
+    def __init__(self, *combinators, **kws):
+        # TODO: should rework this to not hard-code Combinator
+        Combinator.__init__(self, Terminal, *combinators, **kws)
+        vars(self)['combinators'] = combinators
+        
+    def parse(self, stream):
+        # logging.debug(apply_log.format(type(self).__name__, stream))
+        values = []
+        for combinator in self.combinators:
+            result = combinator.parse(stream)
+            if isinstance(result, Success):
+                values.append(result.value)
+                stream = result.tail
+            else:
+                return result.copy()
+        return Success(values, result.tail)
+
+    def _parse(self, trampoline, stream, continuation):
+        # logging.debug(chain_log.format(type(self).__name__, str(t), stream, f))
+        continuation(self.parse(stream))
+
+    def __add__(self, other):
+        if isinstance(other, Terminal):
+            if type(self) is Terminal and type(other) is Terminal:
+                return Terminal(*(self.combinators + other.combinators))
+            elif type(self) is Terminal:
+                return Terminal(*(self.combinators + (other,)))
+            elif type(other) is Terminal:
+                return Terminal(*((self,) + other.combinators))
+            else:
+                return Terminal(self, other)
         else:
-            return result
+            return NotImplemented
 
+    def __radd__(self, other):
+        if isinstance(other, Terminal):
+            if type(self) is Terminal and type(other) is Terminal:
+                return Terminal(*(other.combinators + self.combinators))
+            elif type(self) is Terminal:
+                return Terminal(*((other,) + self.combinators))
+            elif type(other) is Terminal:
+                return Terminal(*(other.combinators) + (self,))
+            else:
+                return Terminal(other, self)
+        else:
+            return NotImplemented
+
+
+class Strings(Terminal):
+    def __init__(self, *strings, **kws):
+        vars(self)['strings_lengths'] = [(s, len(s)) for s in strings]
+
+    def parse(self, stream):
+        values = []
+        for string, length in self.strings_lengths:
+            if (length > len(stream)):
+                return Failure('Unexpected end of stream (expected "%s")' % string)
+            else:
+                if stream.startswith(string):
+                    values.append(string)
+                else:
+                    return Failure('Expected "%s" got "%s"' % (string, stream))
+        return Success(values, stream[sum(i[1] for i in self.strings_lengths):])
+
+    def __str__(self):
+        return 'Strings(' + str(self.strings_lengths) + ')'
+    __repr__ = __str__
+
+    
+class Regex(Terminal):
+    regexes = read_only(Cache(re.compile))
+
+    def __init__(self, pattern, **kws):
+        vars(self)['regex'] = self.regexes[pattern]
+
+    def parse(self, stream):
+        match = self.regex.match(stream)
+        if match:
+            return Success(match.groups(), stream[match.end():])
+        else:
+            return Failure("'%s' didn't match '{}'" % self.regex.pattern)
+
+
+class Binary(Terminal):
+    structs = read_only(struct.Struct)
+
+    def __init__(self, format_string, **kws):
+        vars(self)['struct'] = self.structs[format_string]
+
+    def parse(self, stream):
+        try:
+            return Success(self.struct.unpack_from(stream),
+                           stream[self.struct.size:])
+        except struct.error as error:
+            return Failure(error.args[0], stream)
+
+
+if __name__ == '__main__':
+    import cProfile
+    import timeit
+    import tracemalloc
+    tracemalloc.start()
+
+    # The implementation in Spiewak's paper doesn't seem to be
+    # complete because the only parser that will ever return
+    # "Unexpected trailing characters" is a non-terminal parser.
+    string = Strings(b'01')
+    print('Strings success,', string.parse(b'010101'))
+    print('Strings failure,', string.parse(b'121212'))
+    terminal = Strings(b'0') + Strings(b'1')
+    print('Terminal success,', terminal.parse(b'010101'))
+    sequence = Terminal(Strings(b'0'), Strings(b'1'))
+    print('Terminal success,', terminal.parse(b'010101'))
+    alternation = Strings(b'01') | Strings(b'12')
+    print('Alternation success,', alternation.parse(b'121212'))
+    alternation = Alternation(Strings(b'01'), Strings(b'12'))
+    print('Alternation success,', alternation.parse(b'121212'))
+    sequence = Sequence(Strings(b'0'), Alternation(Strings(b'1'), Strings(b'2')))
+    print('Sequence alternation success,', sequence.parse(b'012'))
+    print('Sequence alternation failure,', sequence.parse(b'032'))
+    sequence = Strings(b'0') + (Strings(b'1') | Strings(b'2'))
+    print('Sequence alternation success,', sequence.parse(b'012'))
+    print('Sequence alternation failure,', sequence.parse(b'032'))
+
+    a = Strings('a')
+    l = Lazy('a')
+    print('Lazy,', l.parse('a'))
+    print('Lazy,', l.parse('a'))
+
+    parser = (Lazy('parser') + Lazy('parser') + Lazy('parser')) | (Lazy('parser') + Lazy('parser')) | Strings(b'a')
+    print('Highly ambiguous,', parser.parse(b'aaaa'))
+
+    # for i in range(2, 9):
+    #     print(i, timeit.timeit('parser.parse(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
+    cProfile.run('''
+for i in range(2, 9):
+    print(i, timeit.timeit('parser.parse(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
+''')
+
+    snapshot = tracemalloc.take_snapshot()
+    top_stats = snapshot.statistics('lineno')
+
+    print("[ Top 10 ]")
+    for stat in top_stats[:10]:
+        print(stat)

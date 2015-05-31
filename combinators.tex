@@ -266,19 +266,38 @@ compare to each other.  The most extensive comparison of modern
 parsing algorithms is in \textcite{antlr4}, where the authors
 benchmark their ALL(*) algorithm against GLR, GLL, packrat/PEG, and
 hand-written recursive-descent implementations as well as some others.
-On their test case, Java code, all of the specialized parsers were
-much faster than the general parsers, by orders of magnitude in some
-cases, with Rascal's GLL parser performing particularly poorly.  They
-don't directly compare their algorithm against an Earley parser but
-state that \textcite{tomita1985efficient} ``shows GLR to be 5x-10x
-faster than Earley.''  It's unclear where this penalty comes from, and
-it should be noted the comparison may no longer be valid because
-Tomita compared the algorithms before Leo published his modifications
-that make Earley run in linear time on LR-regular grammars.  This
-still seems to be the general impression about Earley versus GLR, but
-I haven't seen any evidence backing it up outside Tomita's work.
+On their test case, Java code, all of the limited parsers were much
+faster than the general parsers, by orders of magnitude in some cases,
+with Rascal's GLL parser performing particularly poorly.  They don't
+directly compare their algorithm against an Earley parser but state
+that \textcite{tomita1985efficient} ``shows GLR to be 5x-10x faster
+than Earley.''  It's unclear where this penalty comes from, and it
+should be noted the comparison may no longer be valid because Tomita
+compared the algorithms before Leo published his modifications that
+make Earley run in linear time on LR-regular grammars.  This still
+seems to be the general impression about Earley versus GLR, but I
+haven't seen any evidence backing it up outside Tomita's work.  They
+suggest that based on disabling the caching of lookahead DFAs, ``This
+performance is in line with the high cost of GLL and GLR parsers that
+also do not reduce parser speculation by memoizing parsing
+decisions,'' which seems to suggest part of the problem the general
+were experiencing was O($n^2$) performance because of local
+ambiguities, not constant factors, while in their testing, ALL(*) ran
+in linear time on all of the grammars they tried.  [TODO: Is this a
+consequence of the general parsers only handling a too-limited set of
+grammars in linear time?  I don't know what grammars GLR can parse in
+linear time or if any of these Java grammars fall into that set.]
+However, part of the problem could easily be constant factors, with
+even a linear GSS being slower than a standard stack, for instance.
+They note, ``Of the GLR tools, Elkhound has the best performance
+primarily because it relies on a linear LR(1) stack instead of a GSS
+whenever possible.  Further, we allowed Elkhound to disambiguate
+during the parse like ALL(*),'' As ANTLR generates recursive-descent
+parsers, this suggests that a parser combinator approach that uses
+metaprogramming could be competitive.
 
 
+TODO: rewrite this.
 
 The backend parsing algorithm will be GLL modified to include the
 DDG/L-AG features.  While Valiant's algorithm, which is based on the

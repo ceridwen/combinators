@@ -388,27 +388,24 @@ if __name__ == '__main__':
     import tracemalloc
     tracemalloc.start()
 
-    # l =
-    # '====================================================================='
-
     # The implementation in Spiewak's paper doesn't seem to be
     # complete because the only parser that will ever return
     # "Unexpected trailing characters" is a non-terminal parser.
     parser = LiteralParser(b'01')
-    # print('Combinators,', parser.apply(b'010101'))
-    # print('Combinators,', parser.apply(b'121212'))
+    print('Combinators,', parser.apply(b'010101'))
+    print('Combinators,', parser.apply(b'121212'))
     # logging.debug(l)
     parser = TerminalSequentialParser(LiteralParser(b'0'), LiteralParser(b'1'))
-    # print('Combinators,', parser.apply(b'010101'))
+    print('Combinators,', parser.apply(b'010101'))
     # logging.debug(l)
     parser = DisjunctiveParser(LiteralParser(b'01'), LiteralParser(b'12'))
-    # print('Combinators,', parser.apply(b'121212'))
+    print('Combinators,', parser.apply(b'121212'))
     # logging.debug(l)
     parser = LiteralParser(b'0') + LiteralParser(b'1')
-    # print('Combinators,', parser.apply(b'010101'))
+    print('Combinators,', parser.apply(b'010101'))
     # logging.debug(l)
     parser = LiteralParser(b'01') | LiteralParser(b'12')
-    # print('Combinators,', parser.apply(b'121212'))
+    print('Combinators,', parser.apply(b'121212'))
     # Ugly hack to work around the lack of forward reference support
     # in this prototype
     parser = DisjunctiveParser(0, 0)

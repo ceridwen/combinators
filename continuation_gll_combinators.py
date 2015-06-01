@@ -20,6 +20,10 @@ import six
 
 # Rewrite the continuations as classes and *profile*.
 
+# Typing
+
+# Swierstra's paper
+
 
 class Cache(dict):
     def __init__(self, factory, *args, **kws):
@@ -56,7 +60,7 @@ class Success(Result):
     def copy(self):
         return Success(self.value, self.tail)
     def __str__(self):
-      return 'Success: ' + str(self.value) + ', ' + str(self.tail)
+      return 'Success: ' + str(self.value) + ", '" + str(self.tail) + "'"
     __repr__ = __str__
 
 class Failure(Result):
@@ -279,7 +283,7 @@ class Sequence(Combinator):
 
 class Lazy(Combinator):
     def __init__(self, name):
-        if name.isidentifier():
+        if (six.PY3 and name.isidentifier()) or name.isalnum():
             vars(self)['name'] = name
         else:
             raise SyntaxError("Lazy initialized with a string that isn't a valid Python identifier: %s" % name)
@@ -311,8 +315,6 @@ class Lazy(Combinator):
 
     combinator = property(combinator)
 
-    # def parse(self, stream):
-
     def _parse(self, trampoline, stream, continuation):
         combinator = self.combinator
         self._parse = combinator._parse
@@ -327,10 +329,11 @@ class Action(Combinator):
     def _parse(self, trampoline, stream, continuation):
         def continuation_factory(continuation):
             def action_continuation(result):
+                # print(result)
                 if isinstance(result, Success):
                     return continuation(Success(self.action(result.value), result.tail))
                 else:
-                    return continuation(result1)
+                    return continuation(result)
             return action_continuation
         self.combinator._parse(trampoline, stream, continuation_factory(continuation))
 
@@ -400,12 +403,12 @@ class Strings(Terminal):
         values = []
         for string, length in self.strings_lengths:
             if (length > len(stream)):
-                return Failure('Unexpected end of stream (expected "%s")' % string)
+                return Failure("Unexpected end of stream (expected '%s')" % string)
             else:
                 if stream.startswith(string):
                     values.append(string)
                 else:
-                    return Failure('Expected "%s" got "%s"' % (string, stream))
+                    return Failure("Expected '%s' got '%s'" % (string, stream))
         return Success(values, stream[sum(i[1] for i in self.strings_lengths):])
 
     def __str__(self):
@@ -422,6 +425,8 @@ class Regex(Terminal):
     def parse(self, stream):
         match = self.regex.match(stream)
         if match:
+            # This API is kind of ugly, a regex always needs at least
+            # one group to return a tree element correctly.
             return Success(match.groups(), stream[match.end():])
         else:
             return Failure("'%s' didn't match '{}'" % self.regex.pattern)
@@ -443,49 +448,100 @@ class Binary(Terminal):
 
 if __name__ == '__main__':
     import cProfile
+    import pprint
+    import time
     import timeit
-    import tracemalloc
-    tracemalloc.start()
+
+    import platform
+    CPYTHON = True if platform.python_implementation() == 'CPython' else False
+    if six.PY3 and CPYTHON:
+        import tracemalloc
+        tracemalloc.start()
 
     # The implementation in Spiewak's paper doesn't seem to be
     # complete because the only parser that will ever return
     # "Unexpected trailing characters" is a non-terminal parser.
-    string = Strings(b'01')
-    print('Strings success,', string.parse(b'010101'))
-    print('Strings failure,', string.parse(b'121212'))
-    terminal = Strings(b'0') + Strings(b'1')
-    print('Terminal success,', terminal.parse(b'010101'))
-    sequence = Terminal(Strings(b'0'), Strings(b'1'))
-    print('Terminal success,', terminal.parse(b'010101'))
-    alternation = Strings(b'01') | Strings(b'12')
-    print('Alternation success,', alternation.parse(b'121212'))
-    alternation = Alternation(Strings(b'01'), Strings(b'12'))
-    print('Alternation success,', alternation.parse(b'121212'))
-    sequence = Sequence(Strings(b'0'), Alternation(Strings(b'1'), Strings(b'2')))
-    print('Sequence alternation success,', sequence.parse(b'012'))
-    print('Sequence alternation failure,', sequence.parse(b'032'))
-    sequence = Strings(b'0') + (Strings(b'1') | Strings(b'2'))
-    print('Sequence alternation success,', sequence.parse(b'012'))
-    print('Sequence alternation failure,', sequence.parse(b'032'))
+    string = Strings('ab')
+    print('Strings success,', string.parse('ababab'))
+    print('Strings failure,', string.parse('bcbcbc'))
+    terminal = Strings('a') + Strings('b')
+    print('Terminal success,', terminal.parse('ababab'))
+    sequence = Terminal(Strings('a'), Strings('b'))
+    print('Terminal success,', terminal.parse('ababab'))
+
+    alternation = Strings('ab') | Strings('bc')
+    print('Alternation success,', alternation.parse('bcbcbc'))
+    alternation = Alternation(Strings('ab'), Strings('bc'))
+    print('Alternation success,', alternation.parse('bcbcbc'))
+
+    sequence = Strings('a') + (Strings('b') | Strings('c'))
+    print('Sequence alternation success,', sequence.parse('abc'))
+    print('Sequence alternation success,', sequence.parse('acb'))
+    print('Sequence alternation failure,', sequence.parse('cba'))
+    sequence = Sequence(Strings('a'), Alternation(Strings('b'), Strings('c')))
+    print('Sequence alternation success,', sequence.parse('abc'))
+    print('Sequence alternation success,', sequence.parse('acb'))
+    print('Sequence alternation failure,', sequence.parse('cba'))
+
+    alpha = Regex('([a-zA-Z])')
+    hex_char = Regex('([a-fA-F0-9])')
+
+    alpha_or_hex = alpha | hex_char
+    print('Alpha success,', alpha_or_hex.parse('xyz'))
+    print('Alpha and hex success,', alpha_or_hex.parse('ABC'))
+    print('Hex success,', alpha_or_hex.parse('123'))
+
+    # There's a major divergence from Koopman and Plasmeijer here
+    # because regexes behave like their deterministic combinators, but
+    # deterministic behavior at the word level here is probably more
+    # realistic for profiling.
+    word = Regex('([a-zA-Z]+)')
+    sentence = ((word + Strings('.')) >> (lambda t: t[0])) | ((word + Regex('[\s,]') + Lazy('sentence')) >> (lambda t: t[0][0] + t[1]))
+    print('Sentence success,', sentence.parse('The quick brown fox jumps over the lazy dog.'))
 
     a = Strings('a')
     l = Lazy('a')
     print('Lazy,', l.parse('a'))
     print('Lazy,', l.parse('a'))
 
-    parser = (Lazy('parser') + Lazy('parser') + Lazy('parser')) | (Lazy('parser') + Lazy('parser')) | Strings(b'a')
-    print('Highly ambiguous,', parser.parse(b'aaaa'))
+    ambiguous = (Lazy('ambiguous') + Lazy('ambiguous') + Lazy('ambiguous')) | (Lazy('ambiguous') + Lazy('ambiguous')) | Strings('a')
+    print('Highly ambiguous,', ambiguous.parse('aaa'))
+    # pprint.pprint(ambiguous.combinators)
 
-    # for i in range(2, 9):
-    #     print(i, timeit.timeit('parser.parse(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
+    num = (Strings('0') | Strings('1')) >> (lambda t: int(t[0]))
+    print('Calculator,', num.parse('010101'))
+    print('Calculator,', num.parse('101010'))
+
+    expr = (num + Strings('+') + Lazy('expr')) >> (lambda t: t[2] + t[0]) | (num + Strings('-') + Lazy('expr')) >> (lambda t: t[2] - t[0]) | num
+
+    print('Calculator,', expr.parse('1+1'))
+    print('Calculator,', expr.parse('1+1+1'))
+    print('Calculator,', expr.parse('0+1-1+1+1'))
+    print('Calculator,', expr.parse('1+1+1+1+1'))
+    print('Calculator,', expr.parse('0-1-1-1-1'))
+    print('Calculator,', expr.parse('1-1-2'))
+    print('Calculator,', expr.parse('3'))
+
+    dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
+    sample = ' '.join(dictionary[:10000]) + '.'
+
+    start = time.clock()
+    sentence.parse(sample)
+    end = time.clock()
+    print('Dictionary, %.4f seconds' % (end - start,))
+
+    def time_ambiguous(max_length):
+        for i in range(2, max_length):
+            print(i, timeit.timeit('ambiguous.parse("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
+
     cProfile.run('''
-for i in range(2, 9):
-    print(i, timeit.timeit('parser.parse(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
+time_ambiguous(9)
 ''')
 
-    snapshot = tracemalloc.take_snapshot()
-    top_stats = snapshot.statistics('lineno')
+    if six.PY3 and CPYTHON:
+        snapshot = tracemalloc.take_snapshot()
+        top_stats = snapshot.statistics('lineno')
 
-    print("[ Top 10 ]")
-    for stat in top_stats[:10]:
-        print(stat)
+        print("[ Top 10 ]")
+        for stat in top_stats[:10]:
+            print(stat)

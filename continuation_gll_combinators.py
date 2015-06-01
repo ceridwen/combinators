@@ -31,7 +31,7 @@ class Cache(dict):
         super(Cache, self).__init__(*args, **kws)
     @classmethod
     def fromkeys(cls, factory, seq, value=None):
-        instance = super(Cache, self).fromkeys(seq, value)
+        instance = super(Cache, cls).fromkeys(seq, value)
         instance.factory = factory
         return instance
     def __missing__(self, key):
@@ -60,7 +60,7 @@ class Success(Result):
     def copy(self):
         return Success(self.value, self.tail)
     def __str__(self):
-      return 'Success: ' + str(self.value) + ", '" + str(self.tail) + "'"
+        return 'Success: ' + str(self.value) + ", '" + str(self.tail) + "'"
     __repr__ = __str__
 
 class Failure(Result):
@@ -443,12 +443,12 @@ class Binary(Terminal):
             return Success(self.struct.unpack_from(stream),
                            stream[self.struct.size:])
         except struct.error as error:
-            return Failure(error.args[0], stream)
+            return Failure(error.args[0])
 
 
 if __name__ == '__main__':
     import cProfile
-    import pprint
+    # import pprint
     import time
     import timeit
 
@@ -461,9 +461,9 @@ if __name__ == '__main__':
     # The implementation in Spiewak's paper doesn't seem to be
     # complete because the only parser that will ever return
     # "Unexpected trailing characters" is a non-terminal parser.
-    string = Strings('ab')
-    print('Strings success,', string.parse('ababab'))
-    print('Strings failure,', string.parse('bcbcbc'))
+    strings = Strings('ab')
+    print('Strings success,', strings.parse('ababab'))
+    print('Strings failure,', strings.parse('bcbcbc'))
     terminal = Strings('a') + Strings('b')
     print('Terminal success,', terminal.parse('ababab'))
     sequence = Terminal(Strings('a'), Strings('b'))
@@ -496,7 +496,7 @@ if __name__ == '__main__':
     # deterministic behavior at the word level here is probably more
     # realistic for profiling.
     word = Regex('([a-zA-Z]+)')
-    sentence = ((word + Strings('.')) >> (lambda t: t[0])) | ((word + Regex('[\s,]') + Lazy('sentence')) >> (lambda t: t[0][0] + t[1]))
+    sentence = ((word + Strings('.')) >> (lambda t: t[0])) | ((word + Regex(r'[\s,]') + Lazy('sentence')) >> (lambda t: t[0][0] + t[1]))
     print('Sentence success,', sentence.parse('The quick brown fox jumps over the lazy dog.'))
 
     a = Strings('a')
@@ -504,6 +504,8 @@ if __name__ == '__main__':
     print('Lazy,', l.parse('a'))
     print('Lazy,', l.parse('a'))
 
+    # TODO: Something causes this to fail sometimes, and I haven't yet
+    # been able to figure out what.
     ambiguous = (Lazy('ambiguous') + Lazy('ambiguous') + Lazy('ambiguous')) | (Lazy('ambiguous') + Lazy('ambiguous')) | Strings('a')
     print('Highly ambiguous,', ambiguous.parse('aaa'))
     # pprint.pprint(ambiguous.combinators)

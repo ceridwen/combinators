@@ -24,6 +24,8 @@ import six
 
 # Swierstra's paper
 
+# Koopman/Plasmeijer + Okasaki
+
 
 class Cache(dict):
     def __init__(self, factory, *args, **kws):
@@ -64,12 +66,13 @@ class Success(Result):
     __repr__ = __str__
 
 class Failure(Result):
-    def __init__(self, msg):
+    def __init__(self, msg, stream):
         self.msg = msg
+        self.stream = stream
     def copy(self):
-        return Failure(self.msg)
+        return Failure(self.msg, self.stream)
     def __str__(self):
-        return 'Failure: ' + self.msg
+        return 'Failure: ' + self.msg % self.stream
     __repr__ = __str__
 
 
@@ -126,18 +129,6 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
         return Action(self, act)
 
     def parse(self, stream):
-        successes = set()
-        failures = set()
-        # @tracecalls.TraceCalls(show_ret=True)
-        def nonterminal_continuation(result):
-            if isinstance(result, Success):
-                # if result.tail:
-                #     failures.add(Failure('Unexpected trailing characters: "{}"'.format(str(result.tail))))
-                # else:
-                successes.add(result)
-            else:
-                failures.add(result)
-
         self.stack = []
         # A map of a stream position to a map mapping combinator instances
         # to sets of continuations.
@@ -150,46 +141,53 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
         # A map of Results to sets of functions.
         self.saved = {}
 
-        self._parse(self, stream, nonterminal_continuation)
+        successes = set()
+        failures = set()
+        def nonterminal_success(result, failure, stream):
+            # if result.tail:
+            #     failures.add(Failure('Unexpected trailing characters: "{}"'.format(str(result.tail))))
+            # else:
+            successes.add(result)
+
+        def nonterminal_failure(result):
+            failures.add(result)
+
+        self._parse(self, nonterminal_success, nonterminal_failure, stream)
 
         while self.stack:
-            # logging.debug('Trampoline run() looped.')
             # print(self.stack)
             combinator, stream = self.stack.pop()
-            def continuation_factory(combinator, stream):
-                # @tracecalls.TraceCalls(show_ret=True)
-                def trampoline_continuation(result):
-                    if stream not in self.popped:
-                        self.popped[stream] = {}
-                    if combinator not in self.popped[stream]:
-                        self.popped[stream][combinator] = set()
-                    if isinstance(result, Success):
-                        self.popped[stream][combinator].add(result)
-                    if result not in self.saved:
-                        self.saved[result] = set()
-                    for f in self.backlinks[stream][combinator]:
-                        if f.__code__ not in {i.__code__ for i in self.saved[result]}:
-                            self.saved[result].add(f)
-                            f(result)
-                return trampoline_continuation
-            combinator._parse(self, stream, continuation_factory(combinator, stream))
+            def trampoline_continuation(result, failure, stream):
+                if stream not in self.popped:
+                    self.popped[stream] = {}
+                if combinator not in self.popped[stream]:
+                    self.popped[stream][combinator] = set()
+                if isinstance(result, Success):
+                    self.popped[stream][combinator].add(result)
+                if result not in self.saved:
+                    self.saved[result] = set()
+                for f in self.backlinks[stream][combinator]:
+                    if f.__code__ not in {i.__code__ for i in self.saved[result]}:
+                        self.saved[result].add(f)
+                        f(result, failure, stream)
+            # Probably not right
+            combinator._parse(self, trampoline_continuation, nonterminal_failure, stream)
 
         if successes:
             return list(successes)
         else:
             return list(failures)
 
-    def add(self, combinator, stream, continuation):
-        # logging.debug('Trampoline add() called:\n    Parser: {}\n    Stream: {}\n    Continuation: {}'.format(parser, stream, continuation))
+    def add(self, combinator, success, failure, stream):
         if stream not in self.backlinks:
             self.backlinks[stream] = {}
         if combinator not in self.backlinks[stream]:
             self.backlinks[stream][combinator] = set()
-        if continuation.__code__ not in {i.__code__ for i in self.backlinks[stream][combinator]}:
-            self.backlinks[stream][combinator].add(continuation)
+        if success.__code__ not in {i.__code__ for i in self.backlinks[stream][combinator]}:
+            self.backlinks[stream][combinator].add(success)
         if stream in self.popped and combinator in self.popped[stream]:
             for result in self.popped[stream][combinator]:
-                continuation(result)
+                success(result, failure, stream)
         else:
             if stream not in self.done:
                 self.done[stream] = set()
@@ -198,7 +196,7 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
                 self.done[stream].add(combinator)
 
     @abc.abstractmethod
-    def _parse(self, trampoline, stream, continuation):
+    def _parse(self, trampoline, success, failure, stream):
         raise NotImplementedError
 
     def unparse(self, tree, stream, offset=0):
@@ -213,17 +211,9 @@ class Alternation(Combinator):
         super(Alternation, self).__init__(Combinator, *combinators, **kws)
         vars(self)['combinators'] = frozenset(combinators)
 
-    def _parse(self, trampoline, stream, continuation):
-        results = set()
-        def continuation_factory(continuation):
-            # @tracecalls.TraceCalls(show_ret=True)
-            def alternation_continuation(result):
-                if result not in results:
-                    continuation(result)
-                    results.add(result)
-            return alternation_continuation
+    def _parse(self, trampoline, success, failure, stream):
         for combinator in self.combinators:
-            trampoline.add(combinator, stream, continuation_factory(continuation))
+            trampoline.add(combinator, success, failure, stream)
 
     def __or__(self, other):
         if isinstance(other, Alternation):
@@ -242,29 +232,23 @@ class Sequence(Combinator):
         super(Sequence, self).__init__(Combinator, *combinators, **kws)
         vars(self)['combinators'] = combinators
 
-    def _parse(self, trampoline, stream, continuation):
+    def _parse(self, trampoline, success, failure, stream):
         results = []
+        # The clean way to do is with a separate index variable,
+        # but Python 2.7 doesn't allow an inner function to alter
+        # the variable of an outer one.  The proper way of working
+        # around this is probably using classes instead of
+        # closures because classes have mutable state.
         iterator = iter(self.combinators)
-        # logging.debug(chain_log.format(type(self).__name__, str(t), stream, continuation))
-        def continuation_factory(continuation):
-            # The clean way to do is with a separate index variable,
-            # but Python 2.7 doesn't allow an inner function to alter
-            # the variable of an outer one.  The proper way of working
-            # around this is probably using classes instead of
-            # closures because classes have mutable state.
-            # @tracecalls.TraceCalls(show_ret=True)
-            def sequence_continuation(result):
-                if isinstance(result, Success):
-                    results.append(result)
-                    try:
-                        combinator = next(iterator)
-                    except StopIteration:
-                        return continuation(Success([r.value for r in results], results[-1].tail))
-                    combinator._parse(trampoline, result.tail, sequence_continuation)
-                else:
-                    continuation(result)
-            return sequence_continuation
-        next(iterator)._parse(trampoline, stream, continuation_factory(continuation))
+        def sequence_continuation(result, failure, stream):
+            results.append(result)
+            try:
+                combinator = next(iterator)
+            except StopIteration:
+                success(tuple(results), failure, stream)
+                return
+            combinator._parse(trampoline, sequence_continuation, failure, stream)
+        next(iterator)._parse(trampoline, sequence_continuation, failure, stream)
 
     def __add__(self, other):
         if isinstance(other, Sequence):
@@ -315,10 +299,10 @@ class Lazy(Combinator):
 
     combinator = property(combinator)
 
-    def _parse(self, trampoline, stream, continuation):
+    def _parse(self, trampoline, success, failure, stream):
         combinator = self.combinator
         self._parse = combinator._parse
-        return combinator._parse(trampoline, stream, continuation)
+        return combinator._parse(trampoline, success, failure, stream)
 
 
 class Action(Combinator):
@@ -326,16 +310,10 @@ class Action(Combinator):
         self.combinator = combinator
         self.action = action
 
-    def _parse(self, trampoline, stream, continuation):
-        def continuation_factory(continuation):
-            def action_continuation(result):
-                # print(result)
-                if isinstance(result, Success):
-                    return continuation(Success(self.action(result.value), result.tail))
-                else:
-                    return continuation(result)
-            return action_continuation
-        self.combinator._parse(trampoline, stream, continuation_factory(continuation))
+    def _parse(self, trampoline, success, failure, stream):
+        def action_continuation(result, failure, stream):
+            success(self.action(result), failure, stream)
+        self.combinator._parse(trampoline, action_continuation, failure, stream)
 
 
 class Terminal(Sequence):
@@ -351,9 +329,11 @@ class Terminal(Sequence):
         # TODO: should rework this to not hard-code Combinator
         Combinator.__init__(self, Terminal, *combinators, **kws)
         vars(self)['combinators'] = combinators
-        
+
     def parse(self, stream):
-        # logging.debug(apply_log.format(type(self).__name__, stream))
+        # I can't figure out how to purge the rest of the
+        # Success/Failure uses here without throwing an exception to
+        # create a second return channel.
         values = []
         for combinator in self.combinators:
             result = combinator.parse(stream)
@@ -364,9 +344,12 @@ class Terminal(Sequence):
                 return result.copy()
         return Success(values, result.tail)
 
-    def _parse(self, trampoline, stream, continuation):
-        # logging.debug(chain_log.format(type(self).__name__, str(t), stream, f))
-        continuation(self.parse(stream))
+    def _parse(self, trampoline, success, failure, stream):
+        result = self.parse(stream)
+        if isinstance(result, Success):
+            success(result, failure, stream)
+        else:
+            failure(result)
 
     def __add__(self, other):
         if isinstance(other, Terminal):
@@ -403,13 +386,14 @@ class Strings(Terminal):
         values = []
         for string, length in self.strings_lengths:
             if (length > len(stream)):
-                return Failure("Unexpected end of stream (expected '%s')" % string)
+                return Failure("Unexpected end of stream (expected '%s')" % string, stream)
             else:
                 if stream.startswith(string):
                     values.append(string)
+                    stream = stream[length:]
                 else:
-                    return Failure("Expected '%s' got '%s'" % (string, stream))
-        return Success(values, stream[sum(i[1] for i in self.strings_lengths):])
+                    return Failure("Expected '%s' got '%%s'" % string, stream)
+        return Success(values, stream)
 
     def __str__(self):
         return 'Strings(' + str(self.strings_lengths) + ')'
@@ -429,7 +413,7 @@ class Regex(Terminal):
             # one group to return a tree element correctly.
             return Success(match.groups(), stream[match.end():])
         else:
-            return Failure("'%s' didn't match '{}'" % self.regex.pattern)
+            return Failure("'%s' didn't match '%%s'" % self.regex.pattern, stream)
 
 
 class Binary(Terminal):
@@ -443,7 +427,7 @@ class Binary(Terminal):
             return Success(self.struct.unpack_from(stream),
                            stream[self.struct.size:])
         except struct.error as error:
-            return Failure(error.args[0])
+            return Failure(error.args[0] + "at '%s'", stream)
 
 
 if __name__ == '__main__':

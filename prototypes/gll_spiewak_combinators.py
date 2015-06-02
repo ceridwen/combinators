@@ -236,7 +236,6 @@ class NonTerminalParser(Parser):
         failures = set()
         # @tracecalls.TraceCalls(show_ret=True)
         def nonterminal_continuation(res):
-            nonlocal successes, failures
             if isinstance(res, Success):
                 if res.tail:
                     failures.add(Failure('Unexpected trailing characters: "{}"'.format(str(res.tail))))

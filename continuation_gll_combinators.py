@@ -3,6 +3,7 @@
 from __future__ import absolute_import, division, print_function
 
 import abc
+import collections
 import inspect
 import re
 import struct
@@ -26,6 +27,8 @@ import six
 
 # Koopman/Plasmeijer + Okasaki
 
+# Use exceptions for continuation control flow, e.g. handling errors.
+
 
 class Cache(dict):
     def __init__(self, factory, *args, **kws):
@@ -44,35 +47,27 @@ def read_only(value):
     return property(lambda g: value)
 
 
-# Success = collections.namedtuple('Success', 'node label offsets')
+# Success = 
 
-# Failure = collections.namedtuple('Failure', 'msg offset')
+# Failure = 
 
 # Label = collections.namedtuple('Label', 'combinator start end')
 
 # DEFAULT_FAILURE = Failure('This is the default failure for combinators that cannot generate their own failures.  It should never be returned.', -1)
 
 
-class Result:
-    pass
-class Success(Result):
-    def __init__(self, value, tail):
-        self.value = value
-        self.tail = tail
+class Success(collections.namedtuple('Success', 'tree tail')):
     def copy(self):
-        return Success(self.value, self.tail)
+        return Success(self.tree, self.tail)
     def __str__(self):
-        return 'Success: ' + str(self.value) + ", '" + str(self.tail) + "'"
+        return 'Success: ' + str(self.tree) + ", '" + str(self.tail) + "'"
     __repr__ = __str__
 
-class Failure(Result):
-    def __init__(self, msg, stream):
-        self.msg = msg
-        self.stream = stream
+class Failure(collections.namedtuple('Failure', 'message tail')):
     def copy(self):
-        return Failure(self.msg, self.stream)
+        return Failure(self.message, self.tail)
     def __str__(self):
-        return 'Failure: ' + self.msg % self.stream
+        return 'Failure: ' + self.message % self.tail
     __repr__ = __str__
 
 
@@ -143,14 +138,14 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
 
         successes = set()
         failures = set()
-        def nonterminal_success(result, failure, stream):
+        def nonterminal_success(tree, failure, stream):
             # if result.tail:
             #     failures.add(Failure('Unexpected trailing characters: "{}"'.format(str(result.tail))))
             # else:
-            successes.add(result)
+            successes.add(Success(tree, stream))
 
-        def nonterminal_failure(result):
-            failures.add(result)
+        def nonterminal_failure(message, stream):
+            failures.add(Failure(message, stream))
 
         self._parse(self, nonterminal_success, nonterminal_failure, stream)
 
@@ -233,22 +228,22 @@ class Sequence(Combinator):
         vars(self)['combinators'] = combinators
 
     def _parse(self, trampoline, success, failure, stream):
-        results = []
+        trees = []
         # The clean way to do is with a separate index variable,
         # but Python 2.7 doesn't allow an inner function to alter
         # the variable of an outer one.  The proper way of working
         # around this is probably using classes instead of
         # closures because classes have mutable state.
-        iterator = iter(self.combinators)
-        def sequence_continuation(result, failure, stream):
-            results.append(result)
+        combinators = iter(self.combinators)
+        def sequence_continuation(tree, failure, stream):
+            trees.append(tree)
             try:
-                combinator = next(iterator)
+                combinator = next(combinators)
             except StopIteration:
-                success(tuple(results), failure, stream)
+                success(tuple(trees), failure, stream)
                 return
             combinator._parse(trampoline, sequence_continuation, failure, stream)
-        next(iterator)._parse(trampoline, sequence_continuation, failure, stream)
+        next(combinators)._parse(trampoline, sequence_continuation, failure, stream)
 
     def __add__(self, other):
         if isinstance(other, Sequence):
@@ -311,8 +306,8 @@ class Action(Combinator):
         self.action = action
 
     def _parse(self, trampoline, success, failure, stream):
-        def action_continuation(result, failure, stream):
-            success(self.action(result), failure, stream)
+        def action_continuation(tree, failure, stream):
+            success(self.action(tree), failure, stream)
         self.combinator._parse(trampoline, action_continuation, failure, stream)
 
 
@@ -331,25 +326,33 @@ class Terminal(Sequence):
         vars(self)['combinators'] = combinators
 
     def parse(self, stream):
-        # I can't figure out how to purge the rest of the
-        # Success/Failure uses here without throwing an exception to
-        # create a second return channel.
-        values = []
-        for combinator in self.combinators:
-            result = combinator.parse(stream)
-            if isinstance(result, Success):
-                values.append(result.value)
-                stream = result.tail
-            else:
-                return result.copy()
-        return Success(values, result.tail)
+        result = None
+        def terminal_success(tree, failure, stream):
+            nonlocal result
+            result = Success(tree, stream)
+        def terminal_failure(message, stream):
+            nonlocal result
+            result = Failure(message, stream)
+        self._parse(None, terminal_success, terminal_failure, stream)
+        return result
 
-    def _parse(self, trampoline, success, failure, stream):
-        result = self.parse(stream)
-        if isinstance(result, Success):
-            success(result, failure, stream)
-        else:
-            failure(result)
+    # def _parse(self, trampoline, success, failure, stream):
+    #     if hasattr(self, combinators):
+    #         combinators = iter(self.combinators)
+    #     else:
+    #         combinators = iter((self,))
+
+    #         trees.append(tree)
+    #         combinator = next(combinators)
+    #         except StopIteration:
+    #             success([], failure, stream)
+    #             return
+    #         combinator._parse(trampoline, sequence_continuation, failure, stream)
+
+    #         trees 
+    #     next(iterator)._parse(trampoline, sequence_continuation, failure, stream)
+        
+    #     def sequence_continuation(tree, failure, stream):
 
     def __add__(self, other):
         if isinstance(other, Terminal):
@@ -381,19 +384,20 @@ class Terminal(Sequence):
 class Strings(Terminal):
     def __init__(self, *strings, **kws):
         vars(self)['strings_lengths'] = [(s, len(s)) for s in strings]
+        vars(self)['combinators'] = (self,)
 
-    def parse(self, stream):
-        values = []
+    def _parse(self, trampoline, success, failure, stream):
+        trees = []
         for string, length in self.strings_lengths:
             if (length > len(stream)):
-                return Failure("Unexpected end of stream (expected '%s')" % string, stream)
+                return failure("Unexpected end of stream (expected '%s')" % string, stream)
             else:
                 if stream.startswith(string):
-                    values.append(string)
+                    trees.append(string)
                     stream = stream[length:]
                 else:
-                    return Failure("Expected '%s' got '%%s'" % string, stream)
-        return Success(values, stream)
+                    return failure("Expected '%s' got '%%s'" % string, stream)
+        return success(tuple(trees), failure, stream)
 
     def __str__(self):
         return 'Strings(' + str(self.strings_lengths) + ')'
@@ -405,15 +409,16 @@ class Regex(Terminal):
 
     def __init__(self, pattern, **kws):
         vars(self)['regex'] = self.regexes[pattern]
+        vars(self)['combinators'] = (self,)
 
-    def parse(self, stream):
+    def _parse(self, trampoline, success, failure, stream):
         match = self.regex.match(stream)
         if match:
             # This API is kind of ugly, a regex always needs at least
             # one group to return a tree element correctly.
-            return Success(match.groups(), stream[match.end():])
+            return success(match.groups(), stream[match.end():])
         else:
-            return Failure("'%s' didn't match '%%s'" % self.regex.pattern, stream)
+            return failure("'%s' didn't match '%%s'" % self.regex.pattern, stream)
 
 
 class Binary(Terminal):
@@ -421,13 +426,13 @@ class Binary(Terminal):
 
     def __init__(self, format_string, **kws):
         vars(self)['struct'] = self.structs[format_string]
+        vars(self)['combinators'] = (self,)
 
-    def parse(self, stream):
+    def _parse(self, trampoline, success, failure, stream):
         try:
-            return Success(self.struct.unpack_from(stream),
-                           stream[self.struct.size:])
+            return success(self.struct.unpack_from(stream), stream[self.struct.size:])
         except struct.error as error:
-            return Failure(error.args[0] + "at '%s'", stream)
+            return failure(error.args[0] + "at '%s'", stream)
 
 
 if __name__ == '__main__':

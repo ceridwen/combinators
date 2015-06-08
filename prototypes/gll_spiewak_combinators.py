@@ -15,6 +15,8 @@
 # last block that implements longest match, and it isn't complete
 # anyways.
 
+import pprint
+
 
 class Result:
     pass
@@ -53,38 +55,57 @@ class Trampoline:
         self.saved = {}
 
     def __str__(self):
-        return 'Trampoline:\n    Stack: {}\n    Backlinks: {}\n    Done: {}\n    Popped {}\n    Saved {}'.format(str(self.stack), str(self.backlinks), str(self.done), str(self.popped), str(self.saved))
+        return '\n'.join(['Trampoline', 'Stack', pprint.pformat(self.stack), 'Backlinks', pprint.pformat(self.backlinks), 'Done', pprint.pformat(self.done), 'Popped', pprint.pformat(self.popped), 'Saved', pprint.pformat(self.saved)])
 
-    # @tracecalls.TraceCalls(show_ret=True)
     def run(self):
-        # logging.debug('Trampoline run() called.')
         while self.stack:
-            # logging.debug('Trampoline run() looped.')
-            # print(self.stack)
+            print(self)
             parser, stream = self.remove()
-            def continuation_factory(p, s):
-                # @tracecalls.TraceCalls(show_ret=True)
-                def trampoline_continuation(res):
-                    if s not in self.popped:
-                        self.popped[s] = {}
-                    if p not in self.popped[s]:
-                        self.popped[s][p] = set()
-                    if isinstance(res, Success):
-                        self.popped[s][p].add(res)
-                    # else:
-                    #     return None
-                    if res not in self.saved:
-                        self.saved[res] = set()
-                    for f in self.backlinks[s][p]:
-                        if f.__code__ not in {i.__code__ for i in self.saved[res]}:
-                            self.saved[res].add(f)
-                            f(res)
-                return trampoline_continuation
-            parser.chain(self, stream, continuation_factory(parser, stream))
+            def trampoline_continuation(res):
+                if stream not in self.popped:
+                    self.popped[stream] = {}
+                if parser not in self.popped[stream]:
+                    self.popped[stream][parser] = set()
+                if isinstance(res, Success):
+                    self.popped[stream][parser].add(res)
+                # else:
+                #     return None
+                if res not in self.saved:
+                    self.saved[res] = set()
+                for f in self.backlinks[stream][parser]:
+                    if f.__code__ not in {i.__code__ for i in self.saved[res]}:
+                        self.saved[res].add(f)
+                        f(res)
+                # for f in self.backlinks[stream][parser]:
+                #     if f not in self.saved[res]:
+                #         self.saved[res].add(f)
+                #         f(res)
+            parser.chain(self, stream, trampoline_continuation)
 
-    # @tracecalls.TraceCalls(show_ret=True)
+    # def run(self):
+    #     while self.stack:
+    #         print(self)
+    #         parser, stream = self.remove()
+    #         def continuation_factory(p, s):
+    #             def trampoline_continuation(res):
+    #                 if s not in self.popped:
+    #                     self.popped[s] = {}
+    #                 if p not in self.popped[s]:
+    #                     self.popped[s][p] = set()
+    #                 if isinstance(res, Success):
+    #                     self.popped[s][p].add(res)
+    #                 # else:
+    #                 #     return None
+    #                 if res not in self.saved:
+    #                     self.saved[res] = set()
+    #                 for f in self.backlinks[s][p]:
+    #                     if f.__code__ not in {i.__code__ for i in self.saved[res]}:
+    #                         self.saved[res].add(f)
+    #                         f(res)
+    #             return trampoline_continuation
+    #         parser.chain(self, stream, continuation_factory(parser, stream))
+
     def add(self, p, stream, f):
-        # logging.debug('Trampoline add() called:\n    Parser: {}\n    Stream: {}\n    Continuation: {}'.format(p, stream, f))
         if stream not in self.backlinks:
             self.backlinks[stream] = {}
         if p not in self.backlinks[stream]:
@@ -228,19 +249,17 @@ class Parser:
 
 
 class NonTerminalParser(Parser):
-    # @tracecalls.TraceCalls(show_ret=True)
     def apply(self, stream):
-        # logging.debug(apply_log.format(type(self).__name__, stream))
         t = Trampoline()
         successes = set()
         failures = set()
-        # @tracecalls.TraceCalls(show_ret=True)
         def nonterminal_continuation(res):
             if isinstance(res, Success):
-                if res.tail:
-                    failures.add(Failure('Unexpected trailing characters: "{}"'.format(str(res.tail))))
-                else:
-                    successes.add(res)
+                # Disabled for now.
+                # if res.tail:
+                #     failures.add(Failure('Unexpected trailing characters: "{}"'.format(str(res.tail))))
+                # else:
+                successes.add(res)
             else:
                 failures.add(res)
         self.chain(t, stream, nonterminal_continuation)
@@ -262,24 +281,18 @@ class NonTerminalSequentialParser(NonTerminalParser):
         self.left = left
         self.right = right
 
-    # @tracecalls.TraceCalls(show_ret=True)
     def chain(self, t, stream, f):
-        # logging.debug(chain_log.format(type(self).__name__, str(t), stream, f))
-        def continuation_factory(continuation):
-            # @tracecalls.TraceCalls(show_ret=True)
-            def continuation1(res1):
-                if isinstance(res1, Success):
-                    # @tracecalls.TraceCalls(show_ret=True)
-                    def continuation2(res2):
-                        if isinstance(res2, Success):
-                            return continuation(Success((res1.value, res2.value), res2.tail))
-                        else:
-                            return continuation(res2)
-                    return self.right.chain(t, res1.tail, continuation2)
-                else:
-                    return continuation(res1)
-            return continuation1
-        self.left.chain(t, stream, continuation_factory(f))
+        def continuation1(res1):
+            if isinstance(res1, Success):
+                def continuation2(res2):
+                    if isinstance(res2, Success):
+                        return f(Success((res1.value, res2.value), res2.tail))
+                    else:
+                        return f(res2)
+                return self.right.chain(t, res1.tail, continuation2)
+            else:
+                return f(res1)
+        self.left.chain(t, stream, continuation1)
 
 
 class DisjunctiveParser(NonTerminalParser):
@@ -303,27 +316,18 @@ class DisjunctiveParser(NonTerminalParser):
             return process(self.left) | process(self.right)
         self.alternates = list(gather(set()))
 
-    # @tracecalls.TraceCalls(show_ret=True)
     def chain(self, t, stream, f):
-        # logging.debug(chain_log.format(type(self).__name__, str(t), stream, f))
         results = set()
-        def continuation_factory(continuation):
-            nonlocal results
-            # @tracecalls.TraceCalls(show_ret=True)
-            def disjunctive_continuation(res):
-                nonlocal results
-                if res not in results:
-                    continuation(res)
-                    results.add(res)
-            return disjunctive_continuation
+        def disjunctive_continuation(res):
+            if res not in results:
+                f(res)
+                results.add(res)
         for p in self.alternates:
-            t.add(p, stream, continuation_factory(f))
+            t.add(p, stream, disjunctive_continuation)
 
 
 class TerminalParser(Parser):
-    # @tracecalls.TraceCalls(show_ret=True)
     def chain(self, t, stream, f):
-        # logging.debug(chain_log.format(type(self).__name__, str(t), stream, f))
         f(self.apply(stream))
 
     def __add__(self, other):
@@ -367,9 +371,7 @@ class LiteralParser(TerminalParser):
     def __init__(self, value):
         self.value = value
 
-    # @tracecalls.TraceCalls(show_ret=True)
     def apply(self, stream):
-        # logging.debug(apply_log.format(type(self).__name__, stream))
         length = len(self.value)
         if (length > len(stream)):
             return Failure('Unexpected end of stream (expected "{}")'.format(self.value))
@@ -382,44 +384,135 @@ class LiteralParser(TerminalParser):
                 return Failure('Expected "{}" got "{}"'.format(self.value, stream[:length]))
 
 if __name__ == '__main__':
+    # The implementation in Spiewak's paper doesn't seem to be
+    # complete because the only parser that will ever return
+    # "Unexpected trailing characters" is a non-terminal parser.
     import cProfile
+    import six
+    import time
     import timeit
-    import tracemalloc
-    tracemalloc.start()
+
+    import platform
+    CPYTHON = True if platform.python_implementation() == 'CPython' else False
+    if six.PY3 and CPYTHON:
+        import tracemalloc
+        tracemalloc.start()
 
     # The implementation in Spiewak's paper doesn't seem to be
     # complete because the only parser that will ever return
     # "Unexpected trailing characters" is a non-terminal parser.
-    parser = LiteralParser(b'01')
-    print('Combinators,', parser.apply(b'010101'))
-    print('Combinators,', parser.apply(b'121212'))
-    # logging.debug(l)
-    parser = TerminalSequentialParser(LiteralParser(b'0'), LiteralParser(b'1'))
-    print('Combinators,', parser.apply(b'010101'))
-    # logging.debug(l)
-    parser = DisjunctiveParser(LiteralParser(b'01'), LiteralParser(b'12'))
-    print('Combinators,', parser.apply(b'121212'))
-    # logging.debug(l)
-    parser = LiteralParser(b'0') + LiteralParser(b'1')
-    print('Combinators,', parser.apply(b'010101'))
-    # logging.debug(l)
-    parser = LiteralParser(b'01') | LiteralParser(b'12')
-    print('Combinators,', parser.apply(b'121212'))
+    strings = LiteralParser('ab')
+    print('LiteralParser success,', strings.apply('ababab'))
+    print('LiteralParser failure,', strings.apply('bcbcbc'))
+    terminal = LiteralParser('a') + LiteralParser('b')
+    print('Terminal success,', terminal.apply('ababab'))
+    terminal = TerminalSequentialParser(LiteralParser('a'), LiteralParser('b'))
+    print('Terminal success,', terminal.apply('ababab'))
+
+    alternation = LiteralParser('ab') | LiteralParser('bc')
+    print('Disjunction success,', alternation.apply('bcbcbc'))
+    alternation = DisjunctiveParser(LiteralParser('ab'), LiteralParser('bc'))
+    print('Disjunction success,', alternation.apply('bcbcbc'))
+
+    sequence = LiteralParser('a') + (LiteralParser('b') | LiteralParser('c'))
+    print('Sequence alternation success,', sequence.apply('abc'))
+    print('Sequence alternation success,', sequence.apply('acb'))
+    print('Sequence alternation failure,', sequence.apply('cba'))
+    sequence = NonTerminalSequentialParser(LiteralParser('a'), DisjunctiveParser(LiteralParser('b'), LiteralParser('c')))
+    print('Sequence alternation success,', sequence.apply('abc'))
+    print('Sequence alternation success,', sequence.apply('acb'))
+    print('Sequence alternation failure,', sequence.apply('cba'))
+
+    # alpha = Regex('([a-zA-Z])')
+    # hex_char = Regex('([a-fA-F0-9])')
+
+    # alpha_or_hex = alpha | hex_char
+    # print('Alpha success,', alpha_or_hex.apply('xyz'))
+    # print('Alpha and hex success,', alpha_or_hex.apply('ABC'))
+    # print('Hex success,', alpha_or_hex.apply('123'))
+
+    # a = LiteralParser('a')
+    # l = Lazy('a')
+    # print('Lazy,', l.apply('a'))
+    # print('Lazy,', l.apply('a'))
+    
+    # # There's a major divergence from Koopman and Plasmeijer here
+    # # because regexes behave like their deterministic combinators, but
+    # # deterministic behavior at the word level here is probably more
+    # # realistic for profiling.
+    # word = Regex('([a-zA-Z]+)')
+    # sentence = ((word + LiteralParser('.')) >> (lambda t: t[0])) | ((word + Regex(r'[\s,]') + Lazy('sentence')) >> (lambda t: t[0][0] + t[1]))
+    # print('Sentence success,', sentence.apply('The quick brown fox jumps over the lazy dog.'))
+
     # Ugly hack to work around the lack of forward reference support
     # in this prototype
     parser = DisjunctiveParser(0, 0)
     parser.alternates = [parser + parser + parser, parser + parser, LiteralParser(b'a')]
-    # print('Highly ambiguous,', parser.apply(b'aaaa'))
-    for i in range(2, 11):
-        print(i, timeit.timeit('parser.apply(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
+    print('Highly ambiguous,', parser.apply(b'aaa'))
+
+    # num = (LiteralParser('0') | LiteralParser('1')) >> (lambda t: int(t[0]))
+    # print('Calculator,', num.apply('010101'))
+    # print('Calculator,', num.apply('101010'))
+
+    # expr = (num + LiteralParser('+') + Lazy('expr')) >> (lambda t: t[2] + t[0]) | (num + LiteralParser('-') + Lazy('expr')) >> (lambda t: t[2] - t[0]) | num
+
+    # print('Calculator,', expr.apply('1+1'))
+    # print('Calculator,', expr.apply('1+1+1'))
+    # print('Calculator,', expr.apply('0+1-1+1+1'))
+    # print('Calculator,', expr.apply('1+1+1+1+1'))
+    # print('Calculator,', expr.apply('0-1-1-1-1'))
+    # print('Calculator,', expr.apply('1-1-2'))
+    # print('Calculator,', expr.apply('3'))
+
+#     dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
+#     sample = ' '.join(dictionary[:10000]) + '.'
+
+#     start = time.clock()
+#     sentence.apply(sample)
+#     end = time.clock()
+#     print('Dictionary, %.4f seconds' % (end - start,))
+
+#     def time_ambiguous(max_length):
+#         for i in range(2, max_length):
+#             print(i, timeit.timeit('ambiguous.apply("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
+
 #     cProfile.run('''
-# for i in range(2, 10):
-#     print(timeit.timeit('parser.apply(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
+# time_ambiguous(9)
 # ''')
 
-    snapshot = tracemalloc.take_snapshot()
-    top_stats = snapshot.statistics('lineno')
+    if six.PY3 and CPYTHON:
+        snapshot = tracemalloc.take_snapshot()
+        top_stats = snapshot.statistics('lineno')
 
-    print("[ Top 10 ]")
-    for stat in top_stats[:10]:
-        print(stat)
+        print("[ Top 10 ]")
+        for stat in top_stats[:10]:
+            print(stat)
+
+#     parser = LiteralParser(b'01')
+#     print('Combinators,', parser.apply(b'010101'))
+#     print('Combinators,', parser.apply(b'121212'))
+#     # logging.debug(l)
+#     parser = TerminalSequentialParser(LiteralParser(b'0'), LiteralParser(b'1'))
+#     print('Combinators,', parser.apply(b'010101'))
+#     # logging.debug(l)
+#     parser = DisjunctiveParser(LiteralParser(b'01'), LiteralParser(b'12'))
+#     print('Combinators,', parser.apply(b'121212'))
+#     # logging.debug(l)
+#     parser = LiteralParser(b'0') + LiteralParser(b'1')
+#     print('Combinators,', parser.apply(b'010101'))
+#     # logging.debug(l)
+#     parser = LiteralParser(b'01') | LiteralParser(b'12')
+#     print('Combinators,', parser.apply(b'121212'))
+#     # for i in range(2, 11):
+#     #     print(i, timeit.timeit('parser.apply(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
+# #     cProfile.run('''
+# # for i in range(2, 10):
+# #     print(timeit.timeit('parser.apply(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
+# # ''')
+
+#     snapshot = tracemalloc.take_snapshot()
+#     top_stats = snapshot.statistics('lineno')
+
+#     print("[ Top 10 ]")
+#     for stat in top_stats[:10]:
+#         print(stat)

@@ -1,10 +1,11 @@
-#!/usr/bin/python3
+ #!/usr/bin/python3
 
 from __future__ import absolute_import, division, print_function
 
 import abc
 import collections
 import inspect
+import pprint
 import re
 import struct
 
@@ -56,18 +57,43 @@ def read_only(value):
 # DEFAULT_FAILURE = Failure('This is the default failure for combinators that cannot generate their own failures.  It should never be returned.', -1)
 
 
-class Success(collections.namedtuple('Success', 'tree tail')):
+# Namedtuples test for structural equality which is bizarrely not what I want here.
+
+# class Success(collections.namedtuple('Success', 'tree tail')):
+#     def copy(self):
+#         return Success(self.tree, self.tail)
+#     def __str__(self):
+#         return 'Success: ' + str(self.tree) + ", '" + str(self.tail) + "'"
+#     __repr__ = __str__
+
+# class Failure(collections.namedtuple('Failure', 'message tail')):
+#     def copy(self):
+#         return Failure(self.message, self.tail)
+#     def __str__(self):
+#         return 'Failure: ' + self.message % self.tail
+#     __repr__ = __str__
+
+
+class Result:
+    pass
+class Success(Result):
+    def __init__(self, value, tail):
+        self.value = value
+        self.tail = tail
     def copy(self):
-        return Success(self.tree, self.tail)
+        return Success(self.value, self.tail)
     def __str__(self):
-        return 'Success: ' + str(self.tree) + ", '" + str(self.tail) + "'"
+        return 'Success: ' + str(self.value) + ", '" + str(self.tail) + "'"
     __repr__ = __str__
 
-class Failure(collections.namedtuple('Failure', 'message tail')):
+class Failure(Result):
+    def __init__(self, msg, stream):
+        self.msg = msg
+        self.stream = stream
     def copy(self):
-        return Failure(self.message, self.tail)
+        return Failure(self.msg, self.stream)
     def __str__(self):
-        return 'Failure: ' + self.message % self.tail
+        return 'Failure: ' + self.msg % self.stream
     __repr__ = __str__
 
 
@@ -138,35 +164,60 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
 
         successes = set()
         failures = set()
-        def nonterminal_success(tree, failure, stream):
+        def nonterminal_success(result, failure, stream):
             # if result.tail:
             #     failures.add(Failure('Unexpected trailing characters: "{}"'.format(str(result.tail))))
             # else:
-            successes.add(Success(tree, stream))
+            # Ugly hack
+            if isinstance(result, Result):
+                successes.add(result)
+            else:
+                successes.add(Success(result, stream))
 
-        def nonterminal_failure(message, stream):
-            failures.add(Failure(message, stream))
+        def nonterminal_failure(result, stream):
+            if isinstance(result, Result):
+                failures.add(result)
+            else:
+                failures.add(Failure(result, stream))
 
         self._parse(self, nonterminal_success, nonterminal_failure, stream)
 
         while self.stack:
-            # print(self.stack)
+            print(self)
             combinator, stream = self.stack.pop()
-            def trampoline_continuation(result, failure, stream):
+            def setup_popped():
                 if stream not in self.popped:
                     self.popped[stream] = {}
                 if combinator not in self.popped[stream]:
                     self.popped[stream][combinator] = set()
-                if isinstance(result, Success):
-                    self.popped[stream][combinator].add(result)
-                if result not in self.saved:
-                    self.saved[result] = set()
-                for f in self.backlinks[stream][combinator]:
-                    if f.__code__ not in {i.__code__ for i in self.saved[result]}:
-                        self.saved[result].add(f)
-                        f(result, failure, stream)
-            # Probably not right
-            combinator._parse(self, trampoline_continuation, nonterminal_failure, stream)
+            # The saved set is not part of the original algorithm,
+            # Spiewak added it.  He's using result identity here
+            # to check if something's been done, but there has to
+            # be a better way.
+            def setup_saved(result_tuple):
+                if result_tuple not in self.saved:
+                    self.saved[result_tuple] = set()
+            def trampoline_success(tree, failure, stream1):
+                print('Trampoline: ', tree)
+                result = Success(tree, stream1)
+                setup_popped()
+                self.popped[stream][combinator].add(result)
+                setup_saved(result)
+                for success, failure in self.backlinks[stream][combinator]:
+                    if (success.__code__, failure.__code__) not in {(s.__code__, f.__code__) for s, f in self.saved[result]}:
+                        self.saved[result].add((success, failure))
+                        # print(success, tree, failure, stream1)
+                        success(tree, failure, stream1)
+            def trampoline_failure(message, stream1):
+                result = Failure(message, stream1)
+                setup_popped()
+                setup_saved(result)
+                for success, failure in self.backlinks[stream][combinator]:
+                    # print(success, failure)
+                    if (success.__code__, failure.__code__) not in {(s.__code__, f.__code__) for s, f in self.saved[result]}:
+                        self.saved[result].add((success, failure))
+                        # failure(result, stream)
+            combinator._parse(self, trampoline_success, trampoline_failure, stream)
 
         if successes:
             return list(successes)
@@ -178,8 +229,8 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
             self.backlinks[stream] = {}
         if combinator not in self.backlinks[stream]:
             self.backlinks[stream][combinator] = set()
-        if success.__code__ not in {i.__code__ for i in self.backlinks[stream][combinator]}:
-            self.backlinks[stream][combinator].add(success)
+        if (success.__code__, failure.__code__) not in {(s.__code__, f.__code__) for s, f in self.backlinks[stream][combinator]}:
+            self.backlinks[stream][combinator].add((success, failure))
         if stream in self.popped and combinator in self.popped[stream]:
             for result in self.popped[stream][combinator]:
                 success(result, failure, stream)
@@ -189,6 +240,9 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
             if combinator not in self.done[stream]:
                 self.stack.append((combinator, stream))
                 self.done[stream].add(combinator)
+
+    def __str__(self):
+        return '\n'.join(['Trampoline', 'Stack', pprint.pformat(self.stack), 'Backlinks', pprint.pformat(self.backlinks), 'Done', pprint.pformat(self.done), 'Popped', pprint.pformat(self.popped), 'Saved', pprint.pformat(self.saved)])
 
     @abc.abstractmethod
     def _parse(self, trampoline, success, failure, stream):
@@ -240,6 +294,8 @@ class Sequence(Combinator):
             try:
                 combinator = next(combinators)
             except StopIteration:
+                # print(success, trees, failure, stream)
+                print('Sequence:', trees)
                 success(tuple(trees), failure, stream)
                 return
             combinator._parse(trampoline, sequence_continuation, failure, stream)
@@ -307,6 +363,7 @@ class Action(Combinator):
 
     def _parse(self, trampoline, success, failure, stream):
         def action_continuation(tree, failure, stream):
+            print('Action:', tree, self.action(tree))
             success(self.action(tree), failure, stream)
         self.combinator._parse(trampoline, action_continuation, failure, stream)
 
@@ -416,7 +473,7 @@ class Regex(Terminal):
         if match:
             # This API is kind of ugly, a regex always needs at least
             # one group to return a tree element correctly.
-            return success(match.groups(), stream[match.end():])
+            return success(match.groups(), failure, stream[match.end():])
         else:
             return failure("'%s' didn't match '%%s'" % self.regex.pattern, stream)
 
@@ -455,7 +512,7 @@ if __name__ == '__main__':
     print('Strings failure,', strings.parse('bcbcbc'))
     terminal = Strings('a') + Strings('b')
     print('Terminal success,', terminal.parse('ababab'))
-    sequence = Terminal(Strings('a'), Strings('b'))
+    terminal = Terminal(Strings('a'), Strings('b'))
     print('Terminal success,', terminal.parse('ababab'))
 
     alternation = Strings('ab') | Strings('bc')
@@ -480,14 +537,6 @@ if __name__ == '__main__':
     print('Alpha and hex success,', alpha_or_hex.parse('ABC'))
     print('Hex success,', alpha_or_hex.parse('123'))
 
-    # There's a major divergence from Koopman and Plasmeijer here
-    # because regexes behave like their deterministic combinators, but
-    # deterministic behavior at the word level here is probably more
-    # realistic for profiling.
-    word = Regex('([a-zA-Z]+)')
-    sentence = ((word + Strings('.')) >> (lambda t: t[0])) | ((word + Regex(r'[\s,]') + Lazy('sentence')) >> (lambda t: t[0][0] + t[1]))
-    print('Sentence success,', sentence.parse('The quick brown fox jumps over the lazy dog.'))
-
     a = Strings('a')
     l = Lazy('a')
     print('Lazy,', l.parse('a'))
@@ -498,6 +547,14 @@ if __name__ == '__main__':
     ambiguous = (Lazy('ambiguous') + Lazy('ambiguous') + Lazy('ambiguous')) | (Lazy('ambiguous') + Lazy('ambiguous')) | Strings('a')
     print('Highly ambiguous,', ambiguous.parse('aaa'))
     # pprint.pprint(ambiguous.combinators)
+
+    # There's a major divergence from Koopman and Plasmeijer here
+    # because regexes behave like their deterministic combinators, but
+    # deterministic behavior at the word level here is probably more
+    # realistic for profiling.
+    word = Regex('([a-zA-Z]+)')
+    sentence = ((word + Strings('.')) >> (lambda t: t[0])) | ((word + Regex(r'[\s,]') + Lazy('sentence')) >> (lambda t: t[0][0] + t[1]))
+    print('Sentence success,', sentence.parse('The quick brown fox jumps over the lazy dog.'))
 
     num = (Strings('0') | Strings('1')) >> (lambda t: int(t[0]))
     print('Calculator,', num.parse('010101'))

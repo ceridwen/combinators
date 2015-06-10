@@ -27,7 +27,7 @@ class Success(Result):
     def copy(self):
         return Success(self.value, self.tail)
     def __str__(self):
-      return 'Success: ' + str(self.value) + ', ' + str(self.tail)
+        return 'Success: ' + str(self.value) + ', ' + str(self.tail)
     __repr__ = __str__
 
 class Failure(Result):
@@ -59,9 +59,10 @@ class Trampoline:
 
     def run(self):
         while self.stack:
-            print(self)
+            # print(self)
             parser, stream = self.remove()
-            def trampoline_continuation(res):
+            def trampoline_continuation(res, stream=stream, parser=parser):
+                # print('Trampoline:', res)
                 if stream not in self.popped:
                     self.popped[stream] = {}
                 if parser not in self.popped[stream]:
@@ -73,6 +74,8 @@ class Trampoline:
                 if res not in self.saved:
                     self.saved[res] = set()
                 for f in self.backlinks[stream][parser]:
+                    # print('Locals:', pprint.pformat(locals()), sep='\n')
+                    # print(f.__code__, {i.__code__ for i in self.saved[res]})
                     if f.__code__ not in {i.__code__ for i in self.saved[res]}:
                         self.saved[res].add(f)
                         f(res)
@@ -80,14 +83,16 @@ class Trampoline:
                 #     if f not in self.saved[res]:
                 #         self.saved[res].add(f)
                 #         f(res)
+            # print(inspect.getclosurevars(trampoline_continuation))
             parser.chain(self, stream, trampoline_continuation)
 
     # def run(self):
     #     while self.stack:
-    #         print(self)
+    #         # print(self)
     #         parser, stream = self.remove()
     #         def continuation_factory(p, s):
     #             def trampoline_continuation(res):
+    #                 # print('Trampoline:', res)
     #                 if s not in self.popped:
     #                     self.popped[s] = {}
     #                 if p not in self.popped[s]:
@@ -99,11 +104,16 @@ class Trampoline:
     #                 if res not in self.saved:
     #                     self.saved[res] = set()
     #                 for f in self.backlinks[s][p]:
+    #                     # print('Locals:', pprint.pformat(locals()), sep='\n')
+    #                     # print(f.__code__, {i.__code__ for i in self.saved[res]})
     #                     if f.__code__ not in {i.__code__ for i in self.saved[res]}:
     #                         self.saved[res].add(f)
     #                         f(res)
     #             return trampoline_continuation
-    #         parser.chain(self, stream, continuation_factory(parser, stream))
+    #         thingie = continuation_factory(parser, stream)
+    #         # print(inspect.getclosurevars(thingie))
+    #         parser.chain(self, stream, thingie)
+    #         # parser.chain(self, stream, continuation_factory(parser, stream))
 
     def add(self, p, stream, f):
         if stream not in self.backlinks:
@@ -286,6 +296,7 @@ class NonTerminalSequentialParser(NonTerminalParser):
             if isinstance(res1, Success):
                 def continuation2(res2):
                     if isinstance(res2, Success):
+                        # print('Sequence:', res1, res2)
                         return f(Success((res1.value, res2.value), res2.tail))
                     else:
                         return f(res2)
@@ -319,6 +330,7 @@ class DisjunctiveParser(NonTerminalParser):
     def chain(self, t, stream, f):
         results = set()
         def disjunctive_continuation(res):
+            # print('Disjunction:', res)
             if res not in results:
                 f(res)
                 results.add(res)
@@ -388,11 +400,12 @@ if __name__ == '__main__':
     # complete because the only parser that will ever return
     # "Unexpected trailing characters" is a non-terminal parser.
     import cProfile
+    import platform
     import six
+    # import sys
     import time
     import timeit
 
-    import platform
     CPYTHON = True if platform.python_implementation() == 'CPython' else False
     if six.PY3 and CPYTHON:
         import tracemalloc
@@ -423,6 +436,20 @@ if __name__ == '__main__':
     print('Sequence alternation success,', sequence.apply('acb'))
     print('Sequence alternation failure,', sequence.apply('cba'))
 
+    # Ugly hack to work around the lack of forward reference support
+    # in this prototype
+    ambiguous = DisjunctiveParser(0, 0)
+    ambiguous.alternates = [ambiguous + ambiguous + ambiguous, ambiguous + ambiguous, LiteralParser('a')]
+    print('Highly ambiguous,', ambiguous.apply('aaa'))
+
+    def time_ambiguous(max_length):
+        for i in range(2, max_length):
+            print(i, timeit.timeit('ambiguous.apply("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
+
+    cProfile.run('''
+time_ambiguous(9)
+''')
+
     # alpha = Regex('([a-zA-Z])')
     # hex_char = Regex('([a-fA-F0-9])')
 
@@ -436,33 +463,9 @@ if __name__ == '__main__':
     # print('Lazy,', l.apply('a'))
     # print('Lazy,', l.apply('a'))
     
-    # # There's a major divergence from Koopman and Plasmeijer here
-    # # because regexes behave like their deterministic combinators, but
-    # # deterministic behavior at the word level here is probably more
-    # # realistic for profiling.
     # word = Regex('([a-zA-Z]+)')
     # sentence = ((word + LiteralParser('.')) >> (lambda t: t[0])) | ((word + Regex(r'[\s,]') + Lazy('sentence')) >> (lambda t: t[0][0] + t[1]))
     # print('Sentence success,', sentence.apply('The quick brown fox jumps over the lazy dog.'))
-
-    # Ugly hack to work around the lack of forward reference support
-    # in this prototype
-    parser = DisjunctiveParser(0, 0)
-    parser.alternates = [parser + parser + parser, parser + parser, LiteralParser(b'a')]
-    print('Highly ambiguous,', parser.apply(b'aaa'))
-
-    # num = (LiteralParser('0') | LiteralParser('1')) >> (lambda t: int(t[0]))
-    # print('Calculator,', num.apply('010101'))
-    # print('Calculator,', num.apply('101010'))
-
-    # expr = (num + LiteralParser('+') + Lazy('expr')) >> (lambda t: t[2] + t[0]) | (num + LiteralParser('-') + Lazy('expr')) >> (lambda t: t[2] - t[0]) | num
-
-    # print('Calculator,', expr.apply('1+1'))
-    # print('Calculator,', expr.apply('1+1+1'))
-    # print('Calculator,', expr.apply('0+1-1+1+1'))
-    # print('Calculator,', expr.apply('1+1+1+1+1'))
-    # print('Calculator,', expr.apply('0-1-1-1-1'))
-    # print('Calculator,', expr.apply('1-1-2'))
-    # print('Calculator,', expr.apply('3'))
 
 #     dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
 #     sample = ' '.join(dictionary[:10000]) + '.'
@@ -472,14 +475,6 @@ if __name__ == '__main__':
 #     end = time.clock()
 #     print('Dictionary, %.4f seconds' % (end - start,))
 
-#     def time_ambiguous(max_length):
-#         for i in range(2, max_length):
-#             print(i, timeit.timeit('ambiguous.apply("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
-
-#     cProfile.run('''
-# time_ambiguous(9)
-# ''')
-
     if six.PY3 and CPYTHON:
         snapshot = tracemalloc.take_snapshot()
         top_stats = snapshot.statistics('lineno')
@@ -487,32 +482,3 @@ if __name__ == '__main__':
         print("[ Top 10 ]")
         for stat in top_stats[:10]:
             print(stat)
-
-#     parser = LiteralParser(b'01')
-#     print('Combinators,', parser.apply(b'010101'))
-#     print('Combinators,', parser.apply(b'121212'))
-#     # logging.debug(l)
-#     parser = TerminalSequentialParser(LiteralParser(b'0'), LiteralParser(b'1'))
-#     print('Combinators,', parser.apply(b'010101'))
-#     # logging.debug(l)
-#     parser = DisjunctiveParser(LiteralParser(b'01'), LiteralParser(b'12'))
-#     print('Combinators,', parser.apply(b'121212'))
-#     # logging.debug(l)
-#     parser = LiteralParser(b'0') + LiteralParser(b'1')
-#     print('Combinators,', parser.apply(b'010101'))
-#     # logging.debug(l)
-#     parser = LiteralParser(b'01') | LiteralParser(b'12')
-#     print('Combinators,', parser.apply(b'121212'))
-#     # for i in range(2, 11):
-#     #     print(i, timeit.timeit('parser.apply(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
-# #     cProfile.run('''
-# # for i in range(2, 10):
-# #     print(timeit.timeit('parser.apply(b"' + i * 'a' + '")', 'gc.enable(); from __main__ import parser', number=1000))
-# # ''')
-
-#     snapshot = tracemalloc.take_snapshot()
-#     top_stats = snapshot.statistics('lineno')
-
-#     print("[ Top 10 ]")
-#     for stat in top_stats[:10]:
-#         print(stat)

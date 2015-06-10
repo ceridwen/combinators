@@ -78,6 +78,8 @@ class Result:
     pass
 class Success(Result):
     def __init__(self, value, tail):
+        if isinstance(value, Result):
+            raise TypeError
         self.value = value
         self.tail = tail
     def copy(self):
@@ -183,9 +185,10 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
         self._parse(self, nonterminal_success, nonterminal_failure, stream)
 
         while self.stack:
-            print(self)
+            # print(self)
             combinator, stream = self.stack.pop()
-            def setup_popped():
+            def setup_popped(combinator=combinator, stream=stream):
+                print('Popped:', pprint.pformat(self.popped), combinator, stream, sep='\n')
                 if stream not in self.popped:
                     self.popped[stream] = {}
                 if combinator not in self.popped[stream]:
@@ -194,29 +197,29 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
             # Spiewak added it.  He's using result identity here
             # to check if something's been done, but there has to
             # be a better way.
-            def setup_saved(result_tuple):
-                if result_tuple not in self.saved:
-                    self.saved[result_tuple] = set()
-            def trampoline_success(tree, failure, stream1):
-                print('Trampoline: ', tree)
+            def setup_saved(result):
+                if result not in self.saved:
+                    self.saved[result] = set()
+            def trampoline_success(tree, failure, stream1, combinator=combinator, stream=stream):
+                # print('Trampoline success: ', tree)
                 result = Success(tree, stream1)
+                print('Popped:', pprint.pformat(self.popped), combinator, stream, sep='\n')
                 setup_popped()
                 self.popped[stream][combinator].add(result)
                 setup_saved(result)
-                for success, failure in self.backlinks[stream][combinator]:
-                    if (success.__code__, failure.__code__) not in {(s.__code__, f.__code__) for s, f in self.saved[result]}:
-                        self.saved[result].add((success, failure))
+                for success in self.backlinks[stream][combinator]:
+                    if success.__code__ not in {s.__code__ for s in self.saved[result]}:
+                        self.saved[result].add(success)
                         # print(success, tree, failure, stream1)
                         success(tree, failure, stream1)
-            def trampoline_failure(message, stream1):
+            def trampoline_failure(message, stream1, combinator=combinator, stream=stream):
                 result = Failure(message, stream1)
                 setup_popped()
                 setup_saved(result)
-                for success, failure in self.backlinks[stream][combinator]:
+                for success in self.backlinks[stream][combinator]:
                     # print(success, failure)
-                    if (success.__code__, failure.__code__) not in {(s.__code__, f.__code__) for s, f in self.saved[result]}:
-                        self.saved[result].add((success, failure))
-                        # failure(result, stream)
+                    if success.__code__ not in {s.__code__ for s in self.saved[result]}:
+                        self.saved[result].add(success)
             combinator._parse(self, trampoline_success, trampoline_failure, stream)
 
         if successes:
@@ -229,8 +232,8 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
             self.backlinks[stream] = {}
         if combinator not in self.backlinks[stream]:
             self.backlinks[stream][combinator] = set()
-        if (success.__code__, failure.__code__) not in {(s.__code__, f.__code__) for s, f in self.backlinks[stream][combinator]}:
-            self.backlinks[stream][combinator].add((success, failure))
+        if success.__code__ not in {s.__code__ for s in self.backlinks[stream][combinator]}:
+            self.backlinks[stream][combinator].add(success)
         if stream in self.popped and combinator in self.popped[stream]:
             for result in self.popped[stream][combinator]:
                 success(result, failure, stream)
@@ -241,8 +244,8 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
                 self.stack.append((combinator, stream))
                 self.done[stream].add(combinator)
 
-    def __str__(self):
-        return '\n'.join(['Trampoline', 'Stack', pprint.pformat(self.stack), 'Backlinks', pprint.pformat(self.backlinks), 'Done', pprint.pformat(self.done), 'Popped', pprint.pformat(self.popped), 'Saved', pprint.pformat(self.saved)])
+    # def __str__(self):
+    #     return '\n'.join(['Trampoline', 'Stack', pprint.pformat(self.stack), 'Backlinks', pprint.pformat(self.backlinks), 'Done', pprint.pformat(self.done), 'Popped', pprint.pformat(self.popped), 'Saved', pprint.pformat(self.saved)])
 
     @abc.abstractmethod
     def _parse(self, trampoline, success, failure, stream):
@@ -295,7 +298,7 @@ class Sequence(Combinator):
                 combinator = next(combinators)
             except StopIteration:
                 # print(success, trees, failure, stream)
-                print('Sequence:', trees)
+                # print('Sequence continuation:', trees)
                 success(tuple(trees), failure, stream)
                 return
             combinator._parse(trampoline, sequence_continuation, failure, stream)
@@ -363,7 +366,7 @@ class Action(Combinator):
 
     def _parse(self, trampoline, success, failure, stream):
         def action_continuation(tree, failure, stream):
-            print('Action:', tree, self.action(tree))
+            # print('Action:', tree, self.action(tree))
             success(self.action(tree), failure, stream)
         self.combinator._parse(trampoline, action_continuation, failure, stream)
 
@@ -477,6 +480,9 @@ class Regex(Terminal):
         else:
             return failure("'%s' didn't match '%%s'" % self.regex.pattern, stream)
 
+    def __str__(self):
+        return 'Regex(' + str(self.regex.pattern) + ')'
+    __repr__ = __str__
 
 class Binary(Terminal):
     structs = read_only(struct.Struct)
@@ -494,11 +500,10 @@ class Binary(Terminal):
 
 if __name__ == '__main__':
     import cProfile
-    # import pprint
+    import platform
     import time
     import timeit
 
-    import platform
     CPYTHON = True if platform.python_implementation() == 'CPython' else False
     if six.PY3 and CPYTHON:
         import tracemalloc
@@ -570,21 +575,21 @@ if __name__ == '__main__':
     print('Calculator,', expr.parse('1-1-2'))
     print('Calculator,', expr.parse('3'))
 
-    dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
-    sample = ' '.join(dictionary[:10000]) + '.'
+    # dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
+    # sample = ' '.join(dictionary[:10000]) + '.'
 
-    start = time.clock()
-    sentence.parse(sample)
-    end = time.clock()
-    print('Dictionary, %.4f seconds' % (end - start,))
+    # start = time.clock()
+    # sentence.parse(sample)
+    # end = time.clock()
+    # print('Dictionary, %.4f seconds' % (end - start,))
 
-    def time_ambiguous(max_length):
-        for i in range(2, max_length):
-            print(i, timeit.timeit('ambiguous.parse("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
+#     def time_ambiguous(max_length):
+#         for i in range(2, max_length):
+#             print(i, timeit.timeit('ambiguous.parse("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
 
-    cProfile.run('''
-time_ambiguous(9)
-''')
+#     cProfile.run('''
+# time_ambiguous(9)
+# ''')
 
     if six.PY3 and CPYTHON:
         snapshot = tracemalloc.take_snapshot()

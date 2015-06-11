@@ -27,7 +27,7 @@ class Success(Result):
     def copy(self):
         return Success(self.value, self.tail)
     def __str__(self):
-        return 'Success: ' + str(self.value) + ', ' + str(self.tail)
+        return "Success: %s, '%s'" % (self.value, self.tail)
     __repr__ = __str__
 
 class Failure(Result):
@@ -73,16 +73,16 @@ class Trampoline:
                 #     return None
                 if res not in self.saved:
                     self.saved[res] = set()
-                for f in self.backlinks[stream][parser]:
-                    # print('Locals:', pprint.pformat(locals()), sep='\n')
-                    # print(f.__code__, {i.__code__ for i in self.saved[res]})
-                    if f.__code__ not in {i.__code__ for i in self.saved[res]}:
-                        self.saved[res].add(f)
-                        f(res)
                 # for f in self.backlinks[stream][parser]:
-                #     if f not in self.saved[res]:
+                #     # print('Locals:', pprint.pformat(locals()), sep='\n')
+                #     # print(f.__code__, {i.__code__ for i in self.saved[res]})
+                #     if f.__code__ not in {i.__code__ for i in self.saved[res]}:
                 #         self.saved[res].add(f)
                 #         f(res)
+                for f in self.backlinks[stream][parser]:
+                    if f not in self.saved[res]:
+                        self.saved[res].add(f)
+                        f(res)
             # print(inspect.getclosurevars(trampoline_continuation))
             parser.chain(self, stream, trampoline_continuation)
 
@@ -120,10 +120,12 @@ class Trampoline:
             self.backlinks[stream] = {}
         if p not in self.backlinks[stream]:
             self.backlinks[stream][p] = set()
-        if f.__code__ not in {i.__code__ for i in self.backlinks[stream][p]}:
+        if f not in self.backlinks[stream][p]:
             self.backlinks[stream][p].add(f)
+        # if f.__code__ not in {i.__code__ for i in self.backlinks[stream][p]}:
+        #     self.backlinks[stream][p].add(f)
         if stream in self.popped and p in self.popped[stream]:
-            for res in self.popped[stream][p]:
+            for res in self.popped[stream][p].copy():
                 f(res)
         else:
             if stream not in self.done:

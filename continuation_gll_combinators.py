@@ -78,8 +78,6 @@ class Result:
     pass
 class Success(Result):
     def __init__(self, value, tail):
-        if isinstance(value, Result):
-            raise TypeError
         self.value = value
         self.tail = tail
     def copy(self):
@@ -187,39 +185,48 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
         while self.stack:
             # print(self)
             combinator, stream = self.stack.pop()
+
             def setup_popped(combinator=combinator, stream=stream):
-                print('Popped:', pprint.pformat(self.popped), combinator, stream, sep='\n')
+                # print('Popped:', pprint.pformat(self.popped), combinator, stream, sep='\n')
                 if stream not in self.popped:
                     self.popped[stream] = {}
                 if combinator not in self.popped[stream]:
                     self.popped[stream][combinator] = set()
+
             # The saved set is not part of the original algorithm,
             # Spiewak added it.  He's using result identity here
             # to check if something's been done, but there has to
             # be a better way.
-            def setup_saved(result):
-                if result not in self.saved:
-                    self.saved[result] = set()
-            def trampoline_success(tree, failure, stream1, combinator=combinator, stream=stream):
+            def setup_saved(stream1, combinator=combinator):
+                if stream1 not in self.saved:
+                    self.saved[stream1] = set()
+
+            def trampoline_success(tree, failure, stream1, combinator=combinator, stream=stream, setup_popped=setup_popped):
                 # print('Trampoline success: ', tree)
-                result = Success(tree, stream1)
-                print('Popped:', pprint.pformat(self.popped), combinator, stream, sep='\n')
+                # result = Success(tree, stream1)
+                # print('Trampoline:', pprint.pformat(self.popped), combinator, stream, sep='\n')
                 setup_popped()
-                self.popped[stream][combinator].add(result)
-                setup_saved(result)
+                self.popped[stream][combinator].add(stream1)
+                setup_saved(stream1)
+                # for success in self.backlinks[stream][combinator]:
+                #     if success.__code__ not in {s.__code__ for s in self.saved[(combinator, stream1)]}:
                 for success in self.backlinks[stream][combinator]:
-                    if success.__code__ not in {s.__code__ for s in self.saved[result]}:
-                        self.saved[result].add(success)
+                    if success not in  self.saved[stream1]:
+                        self.saved[stream1].add(success)
                         # print(success, tree, failure, stream1)
                         success(tree, failure, stream1)
-            def trampoline_failure(message, stream1, combinator=combinator, stream=stream):
-                result = Failure(message, stream1)
+
+            def trampoline_failure(message, stream1, combinator=combinator, stream=stream, setup_popped=setup_popped):
+                # result = Failure(message, stream1)
                 setup_popped()
-                setup_saved(result)
+                setup_saved(stream1)
+                # for success in self.backlinks[stream][combinator]:
+                #     # print(success, failure)
+                #     if success.__code__ not in {s.__code__ for s in self.saved[(combinator, stream1)]}:
                 for success in self.backlinks[stream][combinator]:
                     # print(success, failure)
-                    if success.__code__ not in {s.__code__ for s in self.saved[result]}:
-                        self.saved[result].add(success)
+                    if success not in self.saved[stream1]:
+                        self.saved[stream1].add(success)
             combinator._parse(self, trampoline_success, trampoline_failure, stream)
 
         if successes:
@@ -232,7 +239,9 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
             self.backlinks[stream] = {}
         if combinator not in self.backlinks[stream]:
             self.backlinks[stream][combinator] = set()
-        if success.__code__ not in {s.__code__ for s in self.backlinks[stream][combinator]}:
+        # if success.__code__ not in {s.__code__ for s in self.backlinks[stream][combinator]}:
+        #     self.backlinks[stream][combinator].add(success)
+        if success not in self.backlinks[stream][combinator]:
             self.backlinks[stream][combinator].add(success)
         if stream in self.popped and combinator in self.popped[stream]:
             for result in self.popped[stream][combinator]:
@@ -484,6 +493,7 @@ class Regex(Terminal):
         return 'Regex(' + str(self.regex.pattern) + ')'
     __repr__ = __str__
 
+
 class Binary(Terminal):
     structs = read_only(struct.Struct)
 
@@ -501,6 +511,7 @@ class Binary(Terminal):
 if __name__ == '__main__':
     import cProfile
     import platform
+    import sys
     import time
     import timeit
 
@@ -509,6 +520,20 @@ if __name__ == '__main__':
         import tracemalloc
         tracemalloc.start()
 
+    def tracefunc(frame, event, arg, indent=[0]):
+        if event == "call":
+            if frame.f_code.co_filename == 'continuation_gll_combinators.py':
+                indent[0] += 2
+                name = frame.f_code.co_name
+                print("-" * indent[0] + "> call", frame.f_code.co_filename, name)
+                if not (name == '__str__' or name == '__init__' or name == '<lambda>'):
+                    pprint.pprint(frame.f_locals)
+        elif event == "return":
+            if frame.f_code.co_filename == 'continuation_gll_combinators.py':
+                print("<" + "-" * indent[0], "exit", frame.f_code.co_name)
+                indent[0] -= 2
+        return tracefunc
+    
     # The implementation in Spiewak's paper doesn't seem to be
     # complete because the only parser that will ever return
     # "Unexpected trailing characters" is a non-terminal parser.
@@ -546,6 +571,8 @@ if __name__ == '__main__':
     l = Lazy('a')
     print('Lazy,', l.parse('a'))
     print('Lazy,', l.parse('a'))
+    
+    # sys.settrace(tracefunc)
 
     # TODO: Something causes this to fail sometimes, and I haven't yet
     # been able to figure out what.

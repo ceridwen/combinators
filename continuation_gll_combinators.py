@@ -206,7 +206,7 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
                 # result = Success(tree, stream1)
                 # print('Trampoline:', pprint.pformat(self.popped), combinator, stream, sep='\n')
                 setup_popped()
-                self.popped[stream][combinator].add(stream1)
+                self.popped[stream][combinator].add((tree, stream1))
                 setup_saved(stream1)
                 # for success in self.backlinks[stream][combinator]:
                 #     if success.__code__ not in {s.__code__ for s in self.saved[(combinator, stream1)]}:
@@ -244,8 +244,8 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
         if success not in self.backlinks[stream][combinator]:
             self.backlinks[stream][combinator].add(success)
         if stream in self.popped and combinator in self.popped[stream]:
-            for result in self.popped[stream][combinator]:
-                success(result, failure, stream)
+            for tree, stream1 in self.popped[stream][combinator]:
+                success(tree, failure, stream1)
         else:
             if stream not in self.done:
                 self.done[stream] = set()

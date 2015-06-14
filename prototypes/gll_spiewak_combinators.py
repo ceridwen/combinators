@@ -69,51 +69,17 @@ class Trampoline:
                     self.popped[stream][parser] = set()
                 if isinstance(res, Success):
                     self.popped[stream][parser].add(res)
+                    # print('Trampoline success: ', res, pprint.pformat(self.backlinks), pprint.pformat(self.saved), sep='\n')
                 # else:
                 #     return None
                 if res not in self.saved:
                     self.saved[res] = set()
-                # for f in self.backlinks[stream][parser]:
-                #     # print('Locals:', pprint.pformat(locals()), sep='\n')
-                #     # print(f.__code__, {i.__code__ for i in self.saved[res]})
-                #     if f.__code__ not in {i.__code__ for i in self.saved[res]}:
-                #         self.saved[res].add(f)
-                #         f(res)
                 for f in self.backlinks[stream][parser]:
                     if f not in self.saved[res]:
                         self.saved[res].add(f)
                         f(res)
             # print(inspect.getclosurevars(trampoline_continuation))
             parser.chain(self, stream, trampoline_continuation)
-
-    # def run(self):
-    #     while self.stack:
-    #         # print(self)
-    #         parser, stream = self.remove()
-    #         def continuation_factory(p, s):
-    #             def trampoline_continuation(res):
-    #                 # print('Trampoline:', res)
-    #                 if s not in self.popped:
-    #                     self.popped[s] = {}
-    #                 if p not in self.popped[s]:
-    #                     self.popped[s][p] = set()
-    #                 if isinstance(res, Success):
-    #                     self.popped[s][p].add(res)
-    #                 # else:
-    #                 #     return None
-    #                 if res not in self.saved:
-    #                     self.saved[res] = set()
-    #                 for f in self.backlinks[s][p]:
-    #                     # print('Locals:', pprint.pformat(locals()), sep='\n')
-    #                     # print(f.__code__, {i.__code__ for i in self.saved[res]})
-    #                     if f.__code__ not in {i.__code__ for i in self.saved[res]}:
-    #                         self.saved[res].add(f)
-    #                         f(res)
-    #             return trampoline_continuation
-    #         thingie = continuation_factory(parser, stream)
-    #         # print(inspect.getclosurevars(thingie))
-    #         parser.chain(self, stream, thingie)
-    #         # parser.chain(self, stream, continuation_factory(parser, stream))
 
     def add(self, p, stream, f):
         if stream not in self.backlinks:
@@ -122,8 +88,6 @@ class Trampoline:
             self.backlinks[stream][p] = set()
         if f not in self.backlinks[stream][p]:
             self.backlinks[stream][p].add(f)
-        # if f.__code__ not in {i.__code__ for i in self.backlinks[stream][p]}:
-        #     self.backlinks[stream][p].add(f)
         if stream in self.popped and p in self.popped[stream]:
             for res in self.popped[stream][p].copy():
                 f(res)
@@ -133,6 +97,7 @@ class Trampoline:
             if p not in self.done[stream]:
                 self.stack.append((p, stream))
                 self.done[stream].add(p)
+
 
 # The concept of terminal and nonterminal parsers is closely related
 # to the concept of static and dynamic parsers I've discussed in my
@@ -404,7 +369,7 @@ if __name__ == '__main__':
     import cProfile
     import platform
     import six
-    # import sys
+    import sys
     import time
     import timeit
 
@@ -413,12 +378,26 @@ if __name__ == '__main__':
         import tracemalloc
         tracemalloc.start()
 
+    def tracefunc(frame, event, arg, indent=[0]):
+        if event == "call":
+            if frame.f_code.co_filename == 'gll_spiewak_combinators.py':
+                indent[0] += 2
+                name = frame.f_code.co_name
+                print("-" * indent[0] + "> call", frame.f_code.co_filename, name)
+                if not (name == '__str__' or name == '__init__' or name == '<lambda>'):
+                    pprint.pprint(frame.f_locals)
+        elif event == "return":
+            if frame.f_code.co_filename == 'continuation_gll_combinators.py':
+                print("<" + "-" * indent[0], "exit", frame.f_code.co_name)
+                indent[0] -= 2
+        return tracefunc
+
     # The implementation in Spiewak's paper doesn't seem to be
     # complete because the only parser that will ever return
     # "Unexpected trailing characters" is a non-terminal parser.
     strings = LiteralParser('ab')
-    print('LiteralParser success,', strings.apply('ababab'))
-    print('LiteralParser failure,', strings.apply('bcbcbc'))
+    print('Literal success,', strings.apply('ababab'))
+    print('Literal failure,', strings.apply('bcbcbc'))
     terminal = LiteralParser('a') + LiteralParser('b')
     print('Terminal success,', terminal.apply('ababab'))
     terminal = TerminalSequentialParser(LiteralParser('a'), LiteralParser('b'))
@@ -437,6 +416,8 @@ if __name__ == '__main__':
     print('Sequence alternation success,', sequence.apply('abc'))
     print('Sequence alternation success,', sequence.apply('acb'))
     print('Sequence alternation failure,', sequence.apply('cba'))
+    
+    # sys.settrace(tracefunc)
 
     # Ugly hack to work around the lack of forward reference support
     # in this prototype
@@ -444,13 +425,13 @@ if __name__ == '__main__':
     ambiguous.alternates = [ambiguous + ambiguous + ambiguous, ambiguous + ambiguous, LiteralParser('a')]
     print('Highly ambiguous,', ambiguous.apply('aaa'))
 
-    def time_ambiguous(max_length):
-        for i in range(2, max_length):
-            print(i, timeit.timeit('ambiguous.apply("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
+#     def time_ambiguous(max_length):
+#         for i in range(2, max_length):
+#             print(i, timeit.timeit('ambiguous.apply("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
 
-    cProfile.run('''
-time_ambiguous(9)
-''')
+#     cProfile.run('''
+# time_ambiguous(9)
+# ''')
 
     # alpha = Regex('([a-zA-Z])')
     # hex_char = Regex('([a-fA-F0-9])')

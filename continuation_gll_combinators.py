@@ -28,7 +28,8 @@ import six
 
 # Koopman/Plasmeijer + Okasaki
 
-# Use exceptions for continuation control flow, e.g. handling errors.
+# Use exceptions for continuation control flow, e.g. handling parse
+# failures.
 
 
 class Cache(dict):
@@ -183,7 +184,7 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
         self._parse(self, nonterminal_success, nonterminal_failure, stream)
 
         while self.stack:
-            # print(self)
+            # print('Main loop:', self)
             combinator, stream = self.stack.pop()
 
             def setup_popped(combinator=combinator, stream=stream):
@@ -202,16 +203,14 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
                     self.saved[stream1] = set()
 
             def trampoline_success(tree, failure, stream1, combinator=combinator, stream=stream, setup_popped=setup_popped):
-                # print('Trampoline success: ', tree)
                 # result = Success(tree, stream1)
-                # print('Trampoline:', pprint.pformat(self.popped), combinator, stream, sep='\n')
+                # print('Trampoline success: ', tree, pprint.pformat(self.backlinks), pprint.pformat(self.saved), sep='\n')
+                # print('Trampoline success:', pprint.pformat(self.popped), combinator, stream, sep='\n')
                 setup_popped()
                 self.popped[stream][combinator].add((tree, stream1))
                 setup_saved(stream1)
-                # for success in self.backlinks[stream][combinator]:
-                #     if success.__code__ not in {s.__code__ for s in self.saved[(combinator, stream1)]}:
                 for success in self.backlinks[stream][combinator]:
-                    if success not in  self.saved[stream1]:
+                    if success not in self.saved[stream1]:
                         self.saved[stream1].add(success)
                         # print(success, tree, failure, stream1)
                         success(tree, failure, stream1)
@@ -220,9 +219,6 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
                 # result = Failure(message, stream1)
                 setup_popped()
                 setup_saved(stream1)
-                # for success in self.backlinks[stream][combinator]:
-                #     # print(success, failure)
-                #     if success.__code__ not in {s.__code__ for s in self.saved[(combinator, stream1)]}:
                 for success in self.backlinks[stream][combinator]:
                     # print(success, failure)
                     if success not in self.saved[stream1]:
@@ -235,12 +231,11 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
             return list(failures)
 
     def add(self, combinator, success, failure, stream):
+        # print('Add:', self)
         if stream not in self.backlinks:
             self.backlinks[stream] = {}
         if combinator not in self.backlinks[stream]:
             self.backlinks[stream][combinator] = set()
-        # if success.__code__ not in {s.__code__ for s in self.backlinks[stream][combinator]}:
-        #     self.backlinks[stream][combinator].add(success)
         if success not in self.backlinks[stream][combinator]:
             self.backlinks[stream][combinator].add(success)
         if stream in self.popped and combinator in self.popped[stream]:
@@ -253,8 +248,8 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
                 self.stack.append((combinator, stream))
                 self.done[stream].add(combinator)
 
-    # def __str__(self):
-    #     return '\n'.join(['Trampoline', 'Stack', pprint.pformat(self.stack), 'Backlinks', pprint.pformat(self.backlinks), 'Done', pprint.pformat(self.done), 'Popped', pprint.pformat(self.popped), 'Saved', pprint.pformat(self.saved)])
+    def __str__(self):
+        return '\n'.join(['Trampoline', 'Stack', pprint.pformat(self.stack), 'Backlinks', pprint.pformat(self.backlinks), 'Done', pprint.pformat(self.done), 'Popped', pprint.pformat(self.popped), 'Saved', pprint.pformat(self.saved)])
 
     @abc.abstractmethod
     def _parse(self, trampoline, success, failure, stream):
@@ -289,43 +284,64 @@ class Alternation(Combinator):
 
 
 class Sequence(Combinator):
-    def __init__(self, *combinators, **kws):
-        super(Sequence, self).__init__(Combinator, *combinators, **kws)
-        vars(self)['combinators'] = combinators
+    def __init__(self, left, right, **kws):
+        vars(self)['left'] = left
+        vars(self)['right'] = right
 
     def _parse(self, trampoline, success, failure, stream):
-        trees = []
-        # The clean way to do is with a separate index variable,
-        # but Python 2.7 doesn't allow an inner function to alter
-        # the variable of an outer one.  The proper way of working
-        # around this is probably using classes instead of
-        # closures because classes have mutable state.
-        combinators = iter(self.combinators)
-        def sequence_continuation(tree, failure, stream):
-            trees.append(tree)
-            try:
-                combinator = next(combinators)
-            except StopIteration:
-                # print(success, trees, failure, stream)
-                # print('Sequence continuation:', trees)
-                success(tuple(trees), failure, stream)
-                return
-            combinator._parse(trampoline, sequence_continuation, failure, stream)
-        next(combinators)._parse(trampoline, sequence_continuation, failure, stream)
+        def left_success(tree1, failure, stream):
+            def right_success(tree2, failure, stream):
+                success((tree1, tree2), failure, stream)
+            self.right._parse(trampoline, right_success, failure, stream)
+        self.left._parse(trampoline, left_success, failure, stream)
 
-    def __add__(self, other):
-        if isinstance(other, Sequence):
-            return Sequence(*(self.combinators + other.combinators))
-        else:
-            return Sequence(*(self.combinators + (other,)))
-    def __radd__(self, other):
-        if isinstance(other, Sequence):
-            return Sequence(*(other.combinators + self.combinators))
-        else:
-            return Sequence(*((other,) + self.combinators))
-    def __mul__(self, other):
-        type(self)(*(other * self.combinators))
-    __rmul__ = __mul__
+
+# In the standard version of the GLL algorithm, the GSS stores the
+# position within a nonterminal, what they call the grammar slot.
+# Spiewak's version doesn't because it's forcing all nonterminals to
+# be length 2 and using separate continuations for processing the
+
+# class Sequence(Combinator):
+#     def __init__(self, *combinators, **kws):
+#         super(Sequence, self).__init__(Combinator, *combinators, **kws)
+#         vars(self)['combinators'] = combinators
+
+#     def _parse(self, trampoline, success, failure, stream):
+#         trees = []
+#         # The clean way to do is with a separate index variable,
+#         # but Python 2.7 doesn't allow an inner function to alter
+#         # the variable of an outer one.  The proper way of working
+#         # around this is probably using classes instead of
+#         # closures because classes have mutable state.
+#         combinators = iter(self.combinators)
+#         index = 0
+#         def sequence_continuation(tree, failure, stream):
+#             nonlocal index
+#             index += 1
+#             # print('Sequence continuation:', index, sequence_continuation, success, trees, failure, stream)
+#             trees.append(tree)
+#             try:
+#                 combinator = next(combinators)
+#             except StopIteration:
+#                 # print('Sequence continuation call:', success, trees, failure, stream)
+#                 success(tuple(trees), failure, stream)
+#                 return
+#             combinator._parse(trampoline, sequence_continuation, failure, stream)
+#         next(combinators)._parse(trampoline, sequence_continuation, failure, stream)
+
+#     def __add__(self, other):
+#         if isinstance(other, Sequence):
+#             return Sequence(*(self.combinators + other.combinators))
+#         else:
+#             return Sequence(*(self.combinators + (other,)))
+#     def __radd__(self, other):
+#         if isinstance(other, Sequence):
+#             return Sequence(*(other.combinators + self.combinators))
+#         else:
+#             return Sequence(*((other,) + self.combinators))
+#     def __mul__(self, other):
+#         type(self)(*(other * self.combinators))
+#     __rmul__ = __mul__
 
 
 class Lazy(Combinator):
@@ -365,7 +381,7 @@ class Lazy(Combinator):
     def _parse(self, trampoline, success, failure, stream):
         combinator = self.combinator
         self._parse = combinator._parse
-        return combinator._parse(trampoline, success, failure, stream)
+        combinator._parse(trampoline, success, failure, stream)
 
 
 class Action(Combinator):
@@ -405,23 +421,28 @@ class Terminal(Sequence):
         self._parse(None, terminal_success, terminal_failure, stream)
         return result
 
-    # def _parse(self, trampoline, success, failure, stream):
-    #     if hasattr(self, combinators):
-    #         combinators = iter(self.combinators)
-    #     else:
-    #         combinators = iter((self,))
-
-    #         trees.append(tree)
-    #         combinator = next(combinators)
-    #         except StopIteration:
-    #             success([], failure, stream)
-    #             return
-    #         combinator._parse(trampoline, sequence_continuation, failure, stream)
-
-    #         trees 
-    #     next(iterator)._parse(trampoline, sequence_continuation, failure, stream)
-        
-    #     def sequence_continuation(tree, failure, stream):
+    def _parse(self, trampoline, success, failure, stream):
+        trees = []
+        # The clean way to do is with a separate index variable,
+        # but Python 2.7 doesn't allow an inner function to alter
+        # the variable of an outer one.  The proper way of working
+        # around this is probably using classes instead of
+        # closures because classes have mutable state.
+        combinators = iter(self.combinators)
+        index = 0
+        def terminal_continuation(tree, failure, stream):
+            nonlocal index
+            index += 1
+            # print('Sequence continuation:', index, sequence_continuation, success, trees, failure, stream)
+            trees.append(tree)
+            try:
+                combinator = next(combinators)
+            except StopIteration:
+                # print('Sequence continuation call:', success, trees, failure, stream)
+                success(tuple(trees), failure, stream)
+                return
+            combinator._parse(trampoline, terminal_continuation, failure, stream)
+        next(combinators)._parse(trampoline, terminal_continuation, failure, stream)
 
     def __add__(self, other):
         if isinstance(other, Terminal):
@@ -469,7 +490,7 @@ class Strings(Terminal):
         return success(tuple(trees), failure, stream)
 
     def __str__(self):
-        return 'Strings(' + str(self.strings_lengths) + ')'
+        return 'Strings(%s)' % ', '.join(repr(s) for s, _ in self.strings_lengths)
     __repr__ = __str__
 
     
@@ -490,7 +511,7 @@ class Regex(Terminal):
             return failure("'%s' didn't match '%%s'" % self.regex.pattern, stream)
 
     def __str__(self):
-        return 'Regex(' + str(self.regex.pattern) + ')'
+        return 'Regex(%r)' % self.regex.pattern
     __repr__ = __str__
 
 
@@ -510,6 +531,7 @@ class Binary(Terminal):
 
 if __name__ == '__main__':
     import cProfile
+    import gc
     import platform
     import sys
     import time
@@ -540,24 +562,32 @@ if __name__ == '__main__':
     strings = Strings('ab')
     print('Strings success,', strings.parse('ababab'))
     print('Strings failure,', strings.parse('bcbcbc'))
+
     terminal = Strings('a') + Strings('b')
     print('Terminal success,', terminal.parse('ababab'))
     terminal = Terminal(Strings('a'), Strings('b'))
     print('Terminal success,', terminal.parse('ababab'))
+
+    sequence = Sequence(Strings('abc'), Strings('def')) + Strings('ghi') + Strings('jkl')
+    print('Sequence success,', sequence.parse('abcdefghijkl'))
+    # sequence = Strings('abc') + Strings('def') + Strings('ghi') + Strings('jkl')
+    # print('Sequence success,', sequence.parse('abcdefghijkl'))
+    # sequence = Sequence(Strings('abc'), Strings('def'), Strings('ghi'), Strings('jkl'))
+    # print('Sequence success,', sequence.parse('abcdefghijkl'))    
 
     alternation = Strings('ab') | Strings('bc')
     print('Alternation success,', alternation.parse('bcbcbc'))
     alternation = Alternation(Strings('ab'), Strings('bc'))
     print('Alternation success,', alternation.parse('bcbcbc'))
 
-    sequence = Strings('a') + (Strings('b') | Strings('c'))
-    print('Sequence alternation success,', sequence.parse('abc'))
-    print('Sequence alternation success,', sequence.parse('acb'))
-    print('Sequence alternation failure,', sequence.parse('cba'))
-    sequence = Sequence(Strings('a'), Alternation(Strings('b'), Strings('c')))
-    print('Sequence alternation success,', sequence.parse('abc'))
-    print('Sequence alternation success,', sequence.parse('acb'))
-    print('Sequence alternation failure,', sequence.parse('cba'))
+    sequence_alternation = Strings('a') + (Strings('b') | Strings('c'))
+    print('Sequence alternation success,', sequence_alternation.parse('abc'))
+    print('Sequence alternation success,', sequence_alternation.parse('acb'))
+    print('Sequence alternation failure,', sequence_alternation.parse('cba'))
+    sequence_alternation = Sequence(Strings('a'), Alternation(Strings('b'), Strings('c')))
+    print('Sequence alternation success,', sequence_alternation.parse('abc'))
+    print('Sequence alternation success,', sequence_alternation.parse('acb'))
+    print('Sequence alternation failure,', sequence_alternation.parse('cba'))
 
     alpha = Regex('([a-zA-Z])')
     hex_char = Regex('([a-fA-F0-9])')
@@ -588,40 +618,40 @@ if __name__ == '__main__':
     sentence = ((word + Strings('.')) >> (lambda t: t[0])) | ((word + Regex(r'[\s,]') + Lazy('sentence')) >> (lambda t: t[0][0] + t[1]))
     print('Sentence success,', sentence.parse('The quick brown fox jumps over the lazy dog.'))
 
-    num = (Strings('0') | Strings('1')) >> (lambda t: int(t[0]))
-    print('Calculator,', num.parse('010101'))
-    print('Calculator,', num.parse('101010'))
+#     num = (Strings('0') | Strings('1')) >> (lambda t: int(t[0]))
+#     print('Calculator,', num.parse('010101'))
+#     print('Calculator,', num.parse('101010'))
 
-    expr = (num + Strings('+') + Lazy('expr')) >> (lambda t: t[2] + t[0]) | (num + Strings('-') + Lazy('expr')) >> (lambda t: t[2] - t[0]) | num
+#     expr = (num + Strings('+') + Lazy('expr')) >> (lambda t: t[2] + t[0]) | (num + Strings('-') + Lazy('expr')) >> (lambda t: t[2] - t[0]) | num
 
-    print('Calculator,', expr.parse('1+1'))
-    print('Calculator,', expr.parse('1+1+1'))
-    print('Calculator,', expr.parse('0+1-1+1+1'))
-    print('Calculator,', expr.parse('1+1+1+1+1'))
-    print('Calculator,', expr.parse('0-1-1-1-1'))
-    print('Calculator,', expr.parse('1-1-2'))
-    print('Calculator,', expr.parse('3'))
+#     print('Calculator,', expr.parse('1+1'))
+#     print('Calculator,', expr.parse('1+1+1'))
+#     print('Calculator,', expr.parse('0+1-1+1+1'))
+#     print('Calculator,', expr.parse('1+1+1+1+1'))
+#     print('Calculator,', expr.parse('0-1-1-1-1'))
+#     print('Calculator,', expr.parse('1-1-2'))
+#     print('Calculator,', expr.parse('3'))
 
-    # dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
-    # sample = ' '.join(dictionary[:10000]) + '.'
+#     # dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
+#     # sample = ' '.join(dictionary[:10000]) + '.'
 
-    # start = time.clock()
-    # sentence.parse(sample)
-    # end = time.clock()
-    # print('Dictionary, %.4f seconds' % (end - start,))
+#     # start = time.clock()
+#     # sentence.parse(sample)
+#     # end = time.clock()
+#     # print('Dictionary, %.4f seconds' % (end - start,))
 
-#     def time_ambiguous(max_length):
-#         for i in range(2, max_length):
-#             print(i, timeit.timeit('ambiguous.parse("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
+# #     def time_ambiguous(max_length):
+# #         for i in range(2, max_length):
+# #             print(i, timeit.timeit('ambiguous.parse("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
 
-#     cProfile.run('''
-# time_ambiguous(9)
-# ''')
+# #     cProfile.run('''
+# # time_ambiguous(9)
+# # ''')
 
-    if six.PY3 and CPYTHON:
-        snapshot = tracemalloc.take_snapshot()
-        top_stats = snapshot.statistics('lineno')
+#     if six.PY3 and CPYTHON:
+#         snapshot = tracemalloc.take_snapshot()
+#         top_stats = snapshot.statistics('lineno')
 
-        print("[ Top 10 ]")
-        for stat in top_stats[:10]:
-            print(stat)
+#         print("[ Top 10 ]")
+#         for stat in top_stats[:10]:
+#             print(stat)

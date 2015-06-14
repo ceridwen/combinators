@@ -60,6 +60,7 @@ class Trampoline:
     def run(self):
         while self.stack:
             # print(self)
+            # print([type(r) for s in self.popped for p in self.popped[s] for r in self.popped[s][p]])
             parser, stream = self.remove()
             def trampoline_continuation(res, stream=stream, parser=parser):
                 # print('Trampoline:', res)
@@ -425,13 +426,14 @@ if __name__ == '__main__':
     ambiguous.alternates = [ambiguous + ambiguous + ambiguous, ambiguous + ambiguous, LiteralParser('a')]
     print('Highly ambiguous,', ambiguous.apply('aaa'))
 
-#     def time_ambiguous(max_length):
-#         for i in range(2, max_length):
-#             print(i, timeit.timeit('ambiguous.apply("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
+    print('Highly ambiguous')
+    def time_ambiguous(max_length):
+        for i in range(2, max_length):
+            print(i, timeit.timeit('ambiguous.apply("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000), 'seconds')
 
-#     cProfile.run('''
-# time_ambiguous(9)
-# ''')
+    cProfile.run('''
+time_ambiguous(9)
+''')
 
     # alpha = Regex('([a-zA-Z])')
     # hex_char = Regex('([a-fA-F0-9])')

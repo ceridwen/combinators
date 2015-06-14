@@ -198,31 +198,31 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
             # Spiewak added it.  He's using result identity here
             # to check if something's been done, but there has to
             # be a better way.
-            def setup_saved(stream1, combinator=combinator):
-                if stream1 not in self.saved:
-                    self.saved[stream1] = set()
+            def setup_saved(result, combinator=combinator):
+                if result not in self.saved:
+                    self.saved[result] = set()
 
             def trampoline_success(tree, failure, stream1, combinator=combinator, stream=stream, setup_popped=setup_popped):
-                # result = Success(tree, stream1)
+                result = Success(tree, stream1)
                 # print('Trampoline success: ', tree, pprint.pformat(self.backlinks), pprint.pformat(self.saved), sep='\n')
                 # print('Trampoline success:', pprint.pformat(self.popped), combinator, stream, sep='\n')
                 setup_popped()
-                self.popped[stream][combinator].add((tree, stream1))
-                setup_saved(stream1)
+                self.popped[stream][combinator].add(result)
+                setup_saved(result)
                 for success in self.backlinks[stream][combinator]:
-                    if success not in self.saved[stream1]:
-                        self.saved[stream1].add(success)
+                    if success not in self.saved[result]:
+                        self.saved[result].add(success)
                         # print(success, tree, failure, stream1)
                         success(tree, failure, stream1)
 
             def trampoline_failure(message, stream1, combinator=combinator, stream=stream, setup_popped=setup_popped):
-                # result = Failure(message, stream1)
+                result = Failure(message, stream1)
                 setup_popped()
-                setup_saved(stream1)
+                setup_saved(result)
                 for success in self.backlinks[stream][combinator]:
                     # print(success, failure)
-                    if success not in self.saved[stream1]:
-                        self.saved[stream1].add(success)
+                    if success not in self.saved[result]:
+                        self.saved[result].add(success)
             combinator._parse(self, trampoline_success, trampoline_failure, stream)
 
         if successes:
@@ -239,8 +239,8 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
         if success not in self.backlinks[stream][combinator]:
             self.backlinks[stream][combinator].add(success)
         if stream in self.popped and combinator in self.popped[stream]:
-            for tree, stream1 in self.popped[stream][combinator]:
-                success(tree, failure, stream1)
+            for result in self.popped[stream][combinator].copy():
+                success(result.value, failure, result.tail)
         else:
             if stream not in self.done:
                 self.done[stream] = set()
@@ -283,6 +283,13 @@ class Alternation(Combinator):
             return Alternation(*(frozenset([other]) | self.combinators))
 
 
+# In the standard version of the GLL algorithm, the GSS stores the
+# position within a nonterminal, what they call the grammar slot.
+# Spiewak's version doesn't because it's forcing all nonterminals to
+# be length 2 and using separate continuations for processing the
+# first grammar slot and the second grammar slot.  Allowing the use of
+# arbitrary-length sequences will require modifying the GSS handling.
+
 class Sequence(Combinator):
     def __init__(self, left, right, **kws):
         vars(self)['left'] = left
@@ -295,11 +302,6 @@ class Sequence(Combinator):
             self.right._parse(trampoline, right_success, failure, stream)
         self.left._parse(trampoline, left_success, failure, stream)
 
-
-# In the standard version of the GLL algorithm, the GSS stores the
-# position within a nonterminal, what they call the grammar slot.
-# Spiewak's version doesn't because it's forcing all nonterminals to
-# be length 2 and using separate continuations for processing the
 
 # class Sequence(Combinator):
 #     def __init__(self, *combinators, **kws):
@@ -604,8 +606,6 @@ if __name__ == '__main__':
     
     # sys.settrace(tracefunc)
 
-    # TODO: Something causes this to fail sometimes, and I haven't yet
-    # been able to figure out what.
     ambiguous = (Lazy('ambiguous') + Lazy('ambiguous') + Lazy('ambiguous')) | (Lazy('ambiguous') + Lazy('ambiguous')) | Strings('a')
     print('Highly ambiguous,', ambiguous.parse('aaa'))
     # pprint.pprint(ambiguous.combinators)
@@ -618,40 +618,41 @@ if __name__ == '__main__':
     sentence = ((word + Strings('.')) >> (lambda t: t[0])) | ((word + Regex(r'[\s,]') + Lazy('sentence')) >> (lambda t: t[0][0] + t[1]))
     print('Sentence success,', sentence.parse('The quick brown fox jumps over the lazy dog.'))
 
-#     num = (Strings('0') | Strings('1')) >> (lambda t: int(t[0]))
-#     print('Calculator,', num.parse('010101'))
-#     print('Calculator,', num.parse('101010'))
+    num = (Strings('0') | Strings('1')) >> (lambda t: int(t[0]))
+    print('Calculator,', num.parse('010101'))
+    print('Calculator,', num.parse('101010'))
 
-#     expr = (num + Strings('+') + Lazy('expr')) >> (lambda t: t[2] + t[0]) | (num + Strings('-') + Lazy('expr')) >> (lambda t: t[2] - t[0]) | num
+    expr = (num + Strings('+') + Lazy('expr')) >> (lambda t: t[0][0] + t[1]) | (num + Strings('-') + Lazy('expr')) >> (lambda t: t[0][0] - t[1]) | num
 
-#     print('Calculator,', expr.parse('1+1'))
-#     print('Calculator,', expr.parse('1+1+1'))
-#     print('Calculator,', expr.parse('0+1-1+1+1'))
-#     print('Calculator,', expr.parse('1+1+1+1+1'))
-#     print('Calculator,', expr.parse('0-1-1-1-1'))
-#     print('Calculator,', expr.parse('1-1-2'))
-#     print('Calculator,', expr.parse('3'))
+    print('Calculator,', expr.parse('1+1'))
+    print('Calculator,', expr.parse('1+1+1'))
+    print('Calculator,', expr.parse('0+1-1+1+1'))
+    print('Calculator,', expr.parse('1+1+1+1+1'))
+    print('Calculator,', expr.parse('0-1-1-1-1'))
+    print('Calculator,', expr.parse('1-1-2'))
+    print('Calculator,', expr.parse('3'))
 
-#     # dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
-#     # sample = ' '.join(dictionary[:10000]) + '.'
+    dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
+    sample = ' '.join(dictionary[:10000]) + '.'
 
-#     # start = time.clock()
-#     # sentence.parse(sample)
-#     # end = time.clock()
-#     # print('Dictionary, %.4f seconds' % (end - start,))
+    start = time.clock()
+    sentence.parse(sample)
+    end = time.clock()
+    print('Dictionary, %.4f seconds' % (end - start,))
 
-# #     def time_ambiguous(max_length):
-# #         for i in range(2, max_length):
-# #             print(i, timeit.timeit('ambiguous.parse("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000))
+    print('Highly ambiguous')
+    def time_ambiguous(max_length):
+        for i in range(2, max_length):
+            print(i, timeit.timeit('ambiguous.parse("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000), 'seconds')
 
-# #     cProfile.run('''
-# # time_ambiguous(9)
-# # ''')
+    cProfile.run('''
+time_ambiguous(9)
+''')
 
-#     if six.PY3 and CPYTHON:
-#         snapshot = tracemalloc.take_snapshot()
-#         top_stats = snapshot.statistics('lineno')
+    if six.PY3 and CPYTHON:
+        snapshot = tracemalloc.take_snapshot()
+        top_stats = snapshot.statistics('lineno')
 
-#         print("[ Top 10 ]")
-#         for stat in top_stats[:10]:
-#             print(stat)
+        print("[ Top 10 ]")
+        for stat in top_stats[:10]:
+            print(stat)

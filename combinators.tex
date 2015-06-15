@@ -906,22 +906,32 @@ This, combined with the lack of "yield from" in 2.7, means I'm not
 going to try to use it.
 
 
-\subsection{Memoryviews vs. pointers}
-\label{sec:memoryviews_pointers}
+\subsection{Indices versus Slicing}
+\label{sec:indices_slicing}
 
 With Python 2.7+'s memoryviews, it's possible to slice the stream
 without copying, embedding slices in the parse forests passed between
-combinators.  I don't know if it's faster, more memory-efficient,
-both, or neither.  The main disadvantage of this approach is that it
-means the combinators can't handle text since there's no equivalent
-for Python strings, and there are three other factors to consider: all
-of the Python library functions (string methods, struct, re, and so
-on) take an optional argument that's a starting pointer anyways,
-there's no equivalent stringview object (I'd have to write one), and
-pointers provide natural labels for the GSS and SPPF (and memoryviews
-are only hashable in 3.3+, so they can't take over that role in 2.7).
-Primarily because of the last two considerations, I'm going with
-pointers.
+combinators.  The main disadvantage of this approach is that it means
+the combinators can't handle text, particularly Unicode, since there's
+no equivalent for Python strings.  There are also three other factors
+to consider: all of the Python library functions (string methods,
+struct, re, and so on) take an optional argument that's a starting
+index anyways, there's no equivalent stringview object (I'd have to
+write one), and indices provide natural labels for the GSS and SPPF
+(and memoryviews are only hashable in 3.3+, so they can't take over
+that role in 2.7).  Primarily because of the last two considerations,
+I'm going with indices.
+
+To my surprise, when I profiled indices versus string slicing
+directly, string slicing was slower than indices on both CPython and
+PyPy 3, though as expected the indexed version consumed much, much
+less memory on CPython.  The extra time seemed to be spent in the
+hash-heavy functions, so this might have something to do with
+CPython's optimizations for hash tables with string-only keys.  I
+still don't understand why the cost of additional allocations didn't
+overwhelm that, but this is why we profile.  However, the memory
+consumption issue and aforementioned considerations mean I'm sticking
+with indices.
 
 
 \subsection{Module for handling bits}

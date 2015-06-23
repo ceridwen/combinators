@@ -381,6 +381,28 @@ it's all simple, imperative-style code with obvious optimizations.
 \section{Major Implementation Choices}
 \label{sec:implementation_choices}
 
+\subsection{GSS Representation}
+\label{sec:gss_representation}
+
+\textcite{afroozeh_izmaylova} improved the performance of GLL with a
+different representation of the GSS that places information on the
+edges as well as the nodes to avoid creation of duplicate nodes and
+moves the sets $\mathcal{U}$ and $\mathcal{P}$ from global hash tables
+to local hash tables on the nodes.  This results in some clear
+performance gains, and since there's no real cost---their changes only
+move information around---and Python doesn't have a native linked-list
+data type that would work for the GSS layout described in
+\textcite{gll2}, there's no reason not to use their changes.  In their
+representation, GSS nodes are labeled with a nonterminal (a class
+instance) and an index into the input and have links to their outgoing
+edges and two local hash tables associated with $\mathcal{U}$ and
+$\mathcal{P}$, the former containing descriptors as a grammar slot
+plus an index and the latter containing an index.  GSS edges are
+labeled with a grammar slot, i.e. a nonterminal/class instance and an
+integer representing an index into a nonterminal.  Each edge has a
+link to a GSS node and an SPPF node.
+
+
 \subsection{Return an iterator over parse trees or a shared packed
   parse forest.}
 \label{sec:iterator_sppf}

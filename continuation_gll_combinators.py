@@ -222,7 +222,12 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
         self._parse(self, nonterminal_success, nonterminal_failure, stream, index)
 
         while self.stack:
-            # print('Main loop:', self)
+            print('\n'.join(['Trampoline', 'Stack',
+                             pprint.pformat(self.stack), 'Backlinks',
+                             pprint.pformat(self.backlinks), 'Done',
+                             pprint.pformat(self.done), 'Popped',
+                             pprint.pformat(self.popped), 'Saved',
+                             pprint.pformat(self.saved)]))
             combinator, index = self.stack.pop()
 
             # These functions all correspond to the pop() method in
@@ -288,9 +293,6 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
                 self.stack.append((combinator, index))
                 self.done[index].add(combinator)
 
-    # def __str__(self):
-    #     return '\n'.join(['Trampoline', 'Stack', pprint.pformat(self.stack), 'Backlinks', pprint.pformat(self.backlinks), 'Done', pprint.pformat(self.done), 'Popped', pprint.pformat(self.popped), 'Saved', pprint.pformat(self.saved)])
-
     @abc.abstractmethod
     def _parse(self, trampoline, success, failure, stream, index):
         raise NotImplementedError
@@ -330,17 +332,38 @@ class Alternation(Combinator):
 # first grammar slot and the second grammar slot.  Allowing the use of
 # arbitrary-length sequences will require modifying the GSS handling.
 
+# class Sequence(Combinator):
+#     def __init__(self, left, right, **kws):
+#         vars(self)['left'] = left
+#         vars(self)['right'] = right
+
+#     def _parse(self, trampoline, success, failure, stream, index):
+#         def left_success(tree1, failure, index):
+#             def right_success(tree2, failure, index):
+#                 success((tree1, tree2), failure, index)
+#             self.right._parse(trampoline, right_success, failure, stream, index)
+#         self.left._parse(trampoline, left_success, failure, stream, index)
+
+
 class Sequence(Combinator):
-    def __init__(self, left, right, **kws):
-        vars(self)['left'] = left
-        vars(self)['right'] = right
+    def __init__(self, *combinators, **kws):
+        super(Sequence, self).__init__(Combinator, *combinators, **kws)
+        vars(self)['combinators'] = combinators
 
     def _parse(self, trampoline, success, failure, stream, index):
-        def left_success(tree1, failure, index):
-            def right_success(tree2, failure, index):
-                success((tree1, tree2), failure, index)
-            self.right._parse(trampoline, right_success, failure, stream, index)
-        self.left._parse(trampoline, left_success, failure, stream, index)
+        trees = []
+        def continuation_factory(slot: int):
+            if slot == len(self.combinators):
+                def sequence_end(tree, failure, index):
+                    trees.append(tree)
+                    success(tuple(trees), failure, index)
+                return sequence_end
+            else:
+                def sequence_continuation(tree, failure, index):
+                    trees.append(tree)
+                    self.combinators[slot]._parse(trampoline, continuation_factory(slot + 1), failure, stream, index)
+                return sequence_continuation
+        self.combinators[0]._parse(trampoline, continuation_factory(1), failure, stream, index)
 
 
 # class Sequence(Combinator):
@@ -596,7 +619,6 @@ if __name__ == '__main__':
     import trace_calls
 
     trace_calls = trace_calls.TraceCalls(files=('continuation_gll_combinators.py',))
-    # sys.settrace(trace_calls)
 
     # The implementation in Spiewak's paper doesn't seem to be
     # complete because the only parser that will ever return
@@ -644,6 +666,12 @@ if __name__ == '__main__':
     print('Lazy,', l.parse('a'))
     print('Lazy,', l.parse('a'))
     
+    sys.settrace(trace_calls)
+
+    # Afroozeh/Izmaylova example
+    A = (Strings('a') + Lazy('A') + Strings('b')) | (Strings('a') + Lazy('A') + Strings('c')) | Strings('a')
+    print('Afroozeh/Izmaylova,', A.parse('aac'))
+
     ambiguous = (Lazy('ambiguous') + Lazy('ambiguous') + Lazy('ambiguous')) | (Lazy('ambiguous') + Lazy('ambiguous')) | Strings('a')
     print('Highly ambiguous,', ambiguous.parse('aaa'))
     # pprint.pprint(ambiguous.combinators)
@@ -670,29 +698,29 @@ if __name__ == '__main__':
     print('Calculator,', expr.parse('1-1-2'))
     print('Calculator,', expr.parse('3'))
 
-    dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
-    sample = ' '.join(dictionary[:10000]) + '.'
+#     dictionary = [w.strip().replace("'", '') for w in open('/usr/share/dict/words', 'r').read().splitlines() if w.strip().isalpha()]
+#     sample = ' '.join(dictionary[:10000]) + '.'
 
-    start = time.clock()
-    sentence.parse(sample)
-    end = time.clock()
-    print('Dictionary, %.4f seconds' % (end - start,))
+#     start = time.clock()
+#     sentence.parse(sample)
+#     end = time.clock()
+#     print('Dictionary, %.4f seconds' % (end - start,))
 
-    print('Highly ambiguous')
-    def time_ambiguous(max_length):
-        for i in range(2, max_length):
-            print(i, timeit.timeit('ambiguous.parse("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000), 'seconds')
+#     print('Highly ambiguous')
+#     def time_ambiguous(max_length):
+#         for i in range(2, max_length):
+#             print(i, timeit.timeit('ambiguous.parse("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000), 'seconds')
 
-    cProfile.run('''
-time_ambiguous(9)
-''')
+#     cProfile.run('''
+# time_ambiguous(9)
+# ''')
 
-    if six.PY3 and CPYTHON:
-        snapshot = tracemalloc.take_snapshot()
-        top_stats = snapshot.statistics('lineno')
+#     if six.PY3 and CPYTHON:
+#         snapshot = tracemalloc.take_snapshot()
+#         top_stats = snapshot.statistics('lineno')
 
-        print("[ Top 10 ]")
-        for stat in top_stats[:10]:
-            print(stat)
+#         print("[ Top 10 ]")
+#         for stat in top_stats[:10]:
+#             print(stat)
 
-    print('Stack depth:', trace_calls.max_depth)
+#     print('Stack depth:', trace_calls.max_depth)

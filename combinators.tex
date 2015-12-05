@@ -37,10 +37,11 @@ the cost of an implementation that isn't as simple.
   embedding a parsing library into a general-purpose programming
   language, making it easy to add custom code to the parser and not
   requiring that anyone learn a DSL like EBNF or formal grammars.
-\item GLL parsing can parse any CFG, including ambiguous and
-  left-recursive grammars, in $O(n^3)$ time, and unambiguous grammars
-  in linear time, all while remaining top-down depth-first like
-  recursive descent and thus easier to understand and debug.
+\item GLL or Earley can parse any CFG, including ambiguous and
+  left-recursive grammars, in $O(n^3)$ time.  % , and
+  % unambiguous grammars in linear time, all while remaining top-down
+  % depth-first like recursive descent and thus easier to understand and
+  % debug.
 \item Attribute grammars can allow the insertion of arbitrary code
   into the parsing process, principally allowing the parsing of
   context-sensitive grammars that a general CFG algorithm can't handle
@@ -69,25 +70,25 @@ handle common languages and formats \emph{without} having to write
 custom code except for extremely weird cases.  LL and LR grammars are
 too limited: many natural grammars for common problems are not in
 LL($k$) or LR($k$) for any $k$, and LR parsers, which can handle more
-grammars for any given value of $k$, are difficult to debug.
-Meanwhile, there now several algorithms capable of parsing any CFG
-that can also parse all LL and LR grammars in linear time, giving the
-same asymptotic performance as LL and LR parsers while handling a much
-broader range of grammars.  CFGs also have better closure properties
-than LL or LR grammars.  They're closed under language composition,
-that is, they're closed under union, concatenation, and Kleene star.
-Parsing problems with one language embedded in another are becoming
-increasingly common, and the ability to write parsers for two
-different languages and then combine them is useful.  Also, the suffix
-language of a CFL is another CFL \parencite[p. 401]{grune_jacobs} and
-so is its reverse language, which are useful for producing better
-error messages (\ref{sec:errors}).
+grammars for any given value of $k$, are difficult to debug.  For
+instance, the natural way to write a grammar for a left-associative
+binary operation uses left recursion.  Algorithms that can parse any
+CFG are easier to write grammars for and produce better parse trees.
+CFLs also have better closure properties than LL or LR languages.
+They're closed under language composition, that is, they're closed
+under union, concatenation, and Kleene star.  Parsing problems with
+one language embedded in another are becoming increasingly common, and
+the ability to write parsers for two different languages and then
+combine them is useful.  Also, the suffix language of a CFL is another
+CFL \parencite[p. 401]{grune_jacobs} and so is its reverse language,
+both of which are useful for producing better error messages
+(\ref{sec:errors}).
 
 Unfortunately, CFGs are also not powerful enough to handle common
 parsing problems.  Real-world programming languages and data formats
 are context sensitive: C has the \texttt{typedef-name: identifier}
 problem, Python has context-sensitive indentation, real-world HTML has
-context-sensitive features like where \texttt{<input>} tags can
+context-sensitive features, such as where \texttt{<input>} tags can
 appear, and \TeX's DVI files have references to byte offsets in the
 file.  Thus, a good parsing library needs to be able to handle context
 sensitivity.  Note that one example often presented as context
@@ -101,7 +102,7 @@ the whole construct like,
 \end{lstlisting}
 
 where \texttt{.} represents any character and a number in curly braces
-represents repetition as usual.  
+represents repetition as usual.
 
 This technique generalizes to any field prefixed with a finite-size
 integer and beyond.  In any language with finite symbols, any
@@ -232,101 +233,115 @@ like error handling.
 \subsection{Algorithms}
 \label{sec:algorithms}
 
-TODO: Reach a new decision here.
+% The backend parsing algorithm will be GLL modified to include the
+% DDG/L-AG features.
 
-On closer analysis, there are two major questions about algorithm
-performance.  First, while the worst-case performance for all general
-CFG algorithms is $O(n^3)$, the set of grammars which they can handle
-in linear time differs.  One notable advantage of Earley's algorithm
-is that with Leo's modifications it can parse all LR-regular languages
-in linear time \parencites{leo, marpa}, and the set of LR-regular
-languages contains the deterministic languages \parencite{lr-regular}.
-Leo accomplishes this by memoizing certain cases of right recursion
-that would otherwise take $O(n^2)$.  It's not clear to me what
-grammars GLL can handle in linear time.  Scott and Johnstone claim
-GLL, ``runs in linear time on LL grammars and which also allows
-grammar rule factorisation, with consequential speed
-up'' \parencite{gll1}, which could mean that GLL runs in linear time
-on all LL($k$) for all $k$, but that set is a proper subset of the
-deterministic grammars.  However, Spiewak says, ``Thus, the class of
-grammars which can be handled by GLL in O(n) time is precisely
-equivalent to LL(1)'' \parencite{spiewak}, which is a much smaller set
-than all LL($k$) grammars.  Both of these sets are much smaller than
-the LR-regular grammars.  ANTLR3 and ANTLR4 run in linear time on a
-set the authors call LL(*) \parencites{antlr3, antlr4}, which I think
-is equivalent to LL-regular, more or less by directly using DFAs to
-predict which alternative to pick.  It's possible the same approach
-might work for GLL to allow it to run in linear time on LL-regular
-grammars, though LL-regular is a proper subset of the LR-regular
-grammars\parencite{ll-regular}.
+There are about four different algorithms for parsing arbitrary CFGs,
+GLL, GLR, Earley, and CYK/Valiant's algorithm.  While Valiant's has
+the best worst-case time complexity because it depends on matrix
+multiplication and there are matrix multiplication algorithms with
+worst-case run time better than $O(n^3)$, those algorithms require
+more memory than the naive matrix multiplication algorithm and have
+worse constant factors (Coppersmith-Winograd has terrible constant
+factors it's only faster on matrices larger than current hardware can
+accommodate), and CYK/Valiant's algorithm also has worse performance on
+deterministic grammars than the others.  Thus, it's a theoretical
+curiosity, not useful for practical parsing.  The other algorithms all
+have worst-case complexity of $O(n^3)$.  Since the worst-case
+complexity is the same, the real performance considerations are
+asymptotic behavior on typical, i.e. not highly ambiguous, grammars
+and constant factors.
 
-The second question involves constant factors.  There are conflicting
-reports in the literature about how different parsing algorithms
-compare to each other.  The most extensive comparison of modern
-parsing algorithms is in \textcite{antlr4}, where the authors
+Earley's algorithm with Leo's modifications can parse all LR-regular
+languages in linear time \parencites{leo, marpa}.  Leo accomplishes
+this by memoizing certain cases of right recursion that would
+otherwise take $O(n^2)$.  Note that the set of LR-regular languages
+contains the deterministic languages \parencite{lr-regular}.  GLL and
+GLR both parse deterministic languages in linear time and unambiguous
+languages in a worst case of $O(n^2)$, but both can potentially parse
+some unambiguous languages in linear time.  GLR can parse in linear
+time any language that its underlying LR automaton can parse.  For
+example, Elkhound uses an LALR(1) automaton\parencite{elkhound1}.  The
+grammars GLL can parse in linear time depends on its lookahead.
+Spiewak's implementation\parencite{spiewak} and Scott and Johnstone's
+description\parencite{gll1} use one token of lookahead and thus parse
+LL(1) grammars in linear time.  All of these sets are much smaller
+than the LR-regular languages.
+
+The second consideration involves constant factors.  There are
+conflicting reports in the literature about how different parsing
+algorithms compare to each other.  The most extensive comparison of
+modern parsing algorithms is in \textcite{antlr4}, where the authors
 benchmark their ALL(*) algorithm against GLR, GLL, packrat/PEG, and
 hand-written recursive-descent implementations as well as some others.
 On their test case, Java code, all of the limited parsers were much
 faster than the general parsers, by orders of magnitude in some cases,
 with Rascal's GLL parser performing particularly poorly.  They don't
-directly compare their algorithm against an Earley parser but state
-that \textcite{tomita1985efficient} ``shows GLR to be 5x-10x faster
-than Earley.''  It's unclear where this penalty comes from, and it
-should be noted the comparison may no longer be valid because Tomita
-compared the algorithms before Leo published his modifications that
-make Earley run in linear time on LR-regular grammars.  This still
-seems to be the general impression about Earley versus GLR, but I
-haven't seen any evidence backing it up outside Tomita's work.  They
-suggest that based on disabling the caching of lookahead DFAs, ``This
-performance is in line with the high cost of GLL and GLR parsers that
-also do not reduce parser speculation by memoizing parsing
-decisions,'' which seems to suggest part of the problem the general
-were experiencing was O($n^2$) performance because of local
-ambiguities, not constant factors, while in their testing, ALL(*) ran
-in linear time on all of the grammars they tried.  [TODO: Is this a
-consequence of the general parsers only handling a too-limited set of
-grammars in linear time?  I don't know what grammars GLR can parse in
-linear time or if any of these Java grammars fall into that set.]
-However, part of the problem could easily be constant factors, with
-even a linear GSS being slower than a standard stack, for instance.
-They note, ``Of the GLR tools, Elkhound has the best performance
-primarily because it relies on a linear LR(1) stack instead of a GSS
-whenever possible.  Further, we allowed Elkhound to disambiguate
-during the parse like ALL(*),'' As ANTLR generates recursive-descent
-parsers, this suggests that a parser combinator approach that uses
-metaprogramming could be competitive.
+directly compare their algorithm against an Earley parser but say that
+\textcite{tomita1985efficient} ``shows GLR to be 5x-10x faster than
+Earley.''  It's unclear where this penalty comes from, and it should
+be noted the comparison may no longer be valid because Tomita compared
+the algorithms before Leo published his modifications that make Earley
+run in linear time on LR-regular grammars.  This still seems to be the
+general impression about Earley versus GLR, but I haven't seen any
+evidence backing it up outside Tomita's work.  They suggest that based
+on disabling the caching of lookahead DFAs, ``This performance is in
+line with the high cost of GLL and GLR parsers that also do not reduce
+parser speculation by memoizing parsing decisions,'' which seems to
+suggest part of the problem the general parsers were experiencing was
+O($n^2$) performance because of local ambiguities, not constant
+factors, while in their testing, ALL(*) ran in linear time on all of
+the grammars they tried.  [TODO: Is this a consequence of the general
+parsers only handling a too-limited set of grammars in linear time?  I
+don't know if any of these Java inputs fall into LALR(1), for
+instance.]  However, part of the problem could easily be constant
+factors, with even a linear GSS being slower than a standard stack,
+for instance.  They note, ``Of the GLR tools, Elkhound has the best
+performance primarily because it relies on a linear LR(1) stack
+instead of a GSS whenever possible.  Further, we allowed Elkhound to
+disambiguate during the parse like ALL(*).''  As ANTLR generates
+recursive-descent parsers, this suggests that a parser combinator
+approach that uses metaprogramming could be competitive.  Also, like
+Elkhound, a GLL parser could use standard recursive-descent when
+dealing with nonambiguous inputs for better constant factors.
+Assuming that GLL has better constant factors than Earley, it's almost
+certain that there's no global answer to which runs faster because it
+will depend on the grammar and the input.  Beyond that, it's quite
+possible the issue is even more complex because the different memory
+consumption of the two algorithms will affect their performance as
+well.
 
+Beyond performance, other factors in algorithm choice are
+implementation complexity, ease of debugging, compatibility with
+parser combinators, and compatibility with DDGs/L-AGs.  First, while
+none of the general CFG algorithms could be called simple, GLL is the
+easiest because it works almost like a recursive-descent parser.  GLR
+is strictly harder because it adds the difficulties of LR parsing,
+like building an LR automaton and the bottom-up depth-first flow, on
+top of the graph-structured stack and shared packed parse forest
+needed for GLL.  Earley with Leo's modifications is quite complicated,
+probably more so than GLL.  The original versions of both GLR and
+Earley have theoretical problems with producing parse trees, and
+fixing those problems has made the algorithms more complicated and, in
+GLR's case, created a plethora of different versions.  Second, LR
+parsers are notoriously difficult to debug, partly because they work
+bottom-up.  GLL parses depth-first top-down and Earley parses
+breadth-first, both of which are easier to follow.  Third, there's at
+least one existing implementation combining GLL with parser
+combinators, \textcite{spiewak}, and a paper describing a theory for
+combining them with Earley's algorithm, \textcite{earley_combinators}.
+As far as I know, there's no work on implementing parser combinators
+with bottom-up algorithms like GLR.  Finally, GLL should be easy to
+combine with DDGs/L-AGs because of the top-down left-right information
+flow in both GLL and DDGs/L-AGs, but the original DDG implementation
+uses Earley's algorithm\parencite{yakker1} so that should be doable as
+well.
 
-TODO: rewrite this.
-
-The backend parsing algorithm will be GLL modified to include the
-DDG/L-AG features.  While Valiant's algorithm, which is based on the
-CYK algorithm and Boolean matrix multiplication, has the best known
-worst-case run time, CYK has worse average-case run time than other
-CFG parsing algorithms, and linear-time average-case performance is
-more important than sub-cubic-time worst-case performance.  The main
-reason I favor GLL is that the alternative algorithms with linear-time
-average-case performance, GLR and Earley, are both harder to
-understand, while GLL is almost like a recursive-descent parser.
-GLL's similarities to recursive descent make it much easier to
-implement as parser combinators and easier to combine with DDGs/L-AGs
-because of the top-down left-right information flow in both GLL and
-DDGs/L-AGs.
-
-Earley is the clear runner-up here, since there exist implementations
-of it using parser combinators and efficient theoretical developments
-of the algorithm that include all the key features I want like SPPF
-creation.  The original DDG paper \textcite{yakker1} implements DDGs
-on top of Earley's algorithm.
-
-As far as I know, there are no parser combinators for bottom-up
-parsers like GLR, and bottom-up depth-first algorithms are harder to
-understand than both top-down depth-first ones like GLL and
-breadth-first algorithms like Earley.  The original versions of both
-GLR and Earley have theoretical problems with producing parse trees,
-and for GLR, fixing those problems has created a plethora of
-alternatives.  There being no canonical version of GLR is a good
-secondary reason to avoid it.
+% Earley is the clear runner-up here, since there exist implementations
+% of it using parser combinators and efficient theoretical developments
+% of the algorithm that include all the key features I want like SPPF
+% creation.  The original DDG paper \textcite{yakker1} implements DDGs
+% on top of Earley's algorithm.
 
 
 \subsection{Error Recovery}
@@ -381,74 +396,507 @@ it's all simple, imperative-style code with obvious optimizations.
 \section{Major Implementation Choices}
 \label{sec:implementation_choices}
 
-\subsection{GSS Representation}
-\label{sec:gss_representation}
+\subsection{GSS Implementation}
+\label{sec:gss_implementation}
 
-\textcite{afroozeh_izmaylova} improved the performance of GLL with a
-different representation of the GSS that places information on the
-edges as well as the nodes to avoid creation of duplicate nodes and
-moves the sets $\mathcal{U}$ and $\mathcal{P}$ from global hash tables
-to local hash tables on the nodes.  This results in some clear
-performance gains, and since there's no real cost---their changes only
-move information around---and Python doesn't have a native linked-list
-data type that would work for the GSS layout described in
-\textcite{gll2}, there's no reason not to use their changes.  In their
-representation, GSS nodes are labeled with a nonterminal (a class
-instance) and an index into the input and have links to their outgoing
-edges and two local hash tables associated with $\mathcal{U}$ and
-$\mathcal{P}$, the former containing descriptors as a grammar slot
-plus an index and the latter containing an index.  GSS edges are
-labeled with a grammar slot, i.e. a nonterminal/class instance and an
-integer representing an index into a nonterminal.  Each edge has a
-link to a GSS node and an SPPF node.
+\textcite{afroozeh_izmaylova} improve the performance of GLL with a
+different implementation of the GSS that places information on the
+edges as well as the nodes to avoid creation of duplicate nodes that
+represent recalculating the same nonterminal at the same input
+position in different parse paths.  \textcite{spiewak}'s version of
+GLL returns a stream of results, and because it doesn't share results
+across different parse paths, the recalculation of results is critical
+for its correctness.  In other words, Afroozeh and Izmaylova cut out
+exactly the inefficiency that allows a GLL parser to not use an SPPF.
+If you ensure that a particular nonterminal is only calculated once
+for a given input position, though, you \emph{have} to share parse
+results across different paths, which means you have to use an SPPF.
+
+Spiewak's implementation has one other inefficiency compared to both
+Afroozeh and Izmaylova's and \textcite{gll2}'s: he moves the code from
+\texttt{create()} function into \texttt{add()}, and thus his GSS
+contains nodes corresponding to terminals as well as nonterminals.  In
+the case of Afroozeh and Izmaylova's example, parsing ``\textbf{aac}''
+with $A ::= aAb | aAc | a$, Scott and Johnstone's GSS contains four
+nodes.  Spiewak's creates nine nodes: because Spiewak's algorithm
+breaks each nonterminal into its individual terminals instead of GLL
+blocks, there are nodes for each position in the input, 0, 1, and 2,
+not just 1 and 2 as in Scott and Johnstone's.  Likewise, there are
+three nodes for each input position because there are three
+alternatives for $A$, including the terminal $a$.
+
+Afroozeh and Izmaylova's other optimizations also result in clear
+performance gains, both moving the sets $\mathcal{U}$ and
+$\mathcal{P}$ from global hash tables to local hash tables on the GSS
+nodes and eliminating duplication checks during node creation in the
+GSS and SPPF.  (Note that eliminating the SPPF duplication check also
+requires using their GSS.)  Moreover, in Python there's no good native
+linked-list data type that would work for the GSS layout described in
+\textcite{gll2}, only the memory-intensive and
+unnecessarily-doubly-linked \texttt{collections.deque}, while Python's
+hash tables are extremely optimized.  In their implementation, GSS
+nodes are labeled with a nonterminal (a class instance) and an index
+into the input and have links to their outgoing edges and two local
+hash tables associated with $\mathcal{U}$ and $\mathcal{P}$, the
+former containing descriptors as a grammar slot plus an index and the
+latter containing an index.  GSS edges are labeled with a grammar
+slot, i.e. a nonterminal/class instance and an integer representing an
+index into a nonterminal.  Each edge has a link to a GSS node and an
+SPPF node.
 
 
 \subsection{Return an iterator over parse trees or a shared packed
   parse forest.}
 \label{sec:iterator_sppf}
 
-Spiewak chose the former option for his GLL combinators in Scala, but
-it has a couple of problems.  First, it involves freezing the parser
-state, which means that starting a parse requires creating a new
-parser state.  This has some performance implications, particularly
-with respect to memory, and makes cleaning up afterwards more
-difficult, probably demanding some kind of context manager to close
-running coroutines.  Second, it means that changing the implementation
-of the parse forest almost certainly involves changing the
-implementation of the parser itself because the parser state is
+\textcite{spiewak} chose the former option for his GLL combinators in
+Scala, but it has a couple of problems.  First, the obvious
+implementation in Python uses generators/coroutines, which has other
+problems discussed in Section
+\ref{sec:functions_coroutines_continuations}.  It also requires
+freezing the parser state as long as the iterator isn't exhausted,
+which is memory-intensive and would require some manual cleanup to
+close running coroutines.  Second, it means that changing the
+implementation of the parse forest almost certainly involves changing
+the implementation of the parser itself because the parser state is
 entangled with its output.  Third, iterating over subtrees as well as
 alternatives trees will require nested iterators, i.e. an iterator
 that returns another iterator, which gets confusing and requires some
-doubly-suspended state.  Grune and Jacobs bring up another problem in
-what they call the producer-consumer model: anyone wanting to use the
-parse trees will have to analyze multiple trees to figure out how they
-differ to figure out what to do with them.  (Note that it's easy to
-build an infinite iterator so that method should be able to handle
-infinitely-ambiguous grammars.  Avoiding analyzing tree-by-tree will
-require users to understand the SPPF and a good API for analyzing it
-without generating trees.)  They point out that coroutines can reduce
-some of these problems by putting the parser and the consumer of the
-parse tree on an equal footing.  Moura and Ierusalimschy (2009,
-"Revisiting coroutines") show that asymmetric coroutines are as
-powerful as symmetric ones, so it ought to be possible to implement
-this in Python, but I suspect the implementation would involve
-creating a trampoline that passes data between the producer and
-consumer coroutines, and I'm not sure if the added complexity is
-worthwhile, especially given it would involve a performance hit.
+doubly-suspended state.  \textcite{grune_jacobs} bring up another
+problem in what they call the producer-consumer model: anyone wanting
+to use the parse trees will have to analyze multiple trees to figure
+out how they differ to figure out what to do with them, which means
+holding multiple trees in memory at the same time.  (Note that it's
+easy to build an infinite iterator so that method should be able to
+handle infinitely-ambiguous grammars.  Avoiding analyzing tree-by-tree
+will require users to understand the SPPF and a good API for analyzing
+it without generating trees.)  They point out that coroutines can
+reduce some of these problems by putting the parser and the consumer
+of the parse tree on an equal footing.  \textcite{moura_ierusalimschy}
+proves that asymmetric coroutines are as powerful as symmetric ones,
+so it ought to be possible to implement this in Python, but I suspect
+the implementation would involve creating a trampoline that passes
+data between the producer and consumer coroutines, and I'm not sure if
+the added complexity is worthwhile, especially given it would involve
+a performance hit.
 
-Thus, I'm running with the SPPF.  Initially, I'm going to implement
-Tomita's worst-case unbounded-polynomial version rather than Scott and
-Johnstone's binarized worst-case cubic version because binarization
-will make the resulting parse forest harder to understand and work
-with, and I doubt anything this library will ever process will
-approach the worst case because that should only happen with
-pathologically-ambiguous grammars.  However, I should make sure to
-encapsulate the SPPF so if I need to binarize the implementation later
-I don't need to change anything else.
+Spiewak
+\href{https://github.com/djspiewak/gll-combinators/issues/24#issuecomment-59147169}{observes}
+that he hasn't, ``been able to cleanly solve the problem of how to
+encode a proper SPPF in a functional, \emph{combinatorial} style.''
+[This may be related to the problem of representing graphs in a
+functional style and the possibility of cycles in the SPPF.]  I'm more
+concerned about performance and usability than functional purity, so
+I'm running with the SPPF.
+
+
+\subsection{Tree and SPPF implementations}
+\label{sec:tree_sppf_implementations}
+
+The standard implementation of a parse tree in Python is nested
+lists/tuples.  (Some people call this a ``rose tree'', ``k/m/n-ary/way
+tree,'' or ``multiway tree,'' usually to distinguish it from trees of
+fixed arity.)  Moving from trees to SPPFs introduces two complexities.
+First, there needs to be a new type of node, which I will call ``or
+nodes,'' to represent cases where the same subsequence of the input
+has multiple possible derivations.  Second, subtrees need to be
+shared, and to bound space complexity by $O(n^3)$, the SPPF has to be
+binarized\parencite{billot_lang}, so that all of the original nodes,
+which I will call ``sequence nodes,'' have only two children.  As
+\textcite{billot_lang} note, representing the sequence nodes with
+linked lists provides the necessary binarization.  In effect, this
+change puts a tree into
+\href{https://en.wikipedia.org/wiki/Left-child_right-sibling_binary_tree}{left-child
+  right-sibling binary tree} form and allows the necessary sharing in
+an SPPF.  Scott and Johnstone use the term ``symbol nodes'' to refer
+to the head of these linked lists, ``intermediate nodes'' to refer to
+the other nodes in the linked list, and ``packed nodes'' to refer to
+what I call ``or nodes.''
+
+Unlike for a single parse tree, when building a shared packed parse
+forest it's necessary to label the nodes so that different branches of
+the parse traversal share subforests.  Traditional parser combinators
+don't provide any natural node labeling because of the absence of
+labeled nonterminals.  Moreover, GLL needs labels to merge different
+branches of the parse in the GSS.  There's an natural labeling scheme
+for parse trees based on partitioning the input that Scott and
+Johnstone use but never explicitly explain.  Each terminal or
+uninterrupted sequence of terminals has a starting and ending offset
+so the corresponding leaf node can be labeled with (terminals,
+starting\_offset, ending\_offset).  The leaf nodes read in offset
+order must cover the entire input, and in fact reading them in order
+in the absence of semantic actions will return the original input.
+The rest of the tree nodes represent partitions further subdivided
+into subpartitions labeled with nonterminals, with the root node
+corresponding to (start\_symbol, 0, length(input) - 1) (zero-indexed).
+Because parser combinators don't have nonterminal labels, Spiewak uses
+parser identity instead.  Like Spiewak, I intend to use parser
+combinator class instances as node labels in GLL.  [TODO: discuss
+Earley.]
+
+However, I don't understand the relationship between Scott and
+Johnstone's partition model and parses that don't consume all the
+input.  The natural way to implement nondeterminism leads to returning
+all incomplete parses as well as the complete parses.  Both Spiewak
+and Hutton and Meijer mention this natural ambiguity.
+
+\begin{quote}
+  It is also worth noting that we do not allow \texttt{Success}(es)
+  which have failed to consume the entire input stream.  We will
+  actually receive a \texttt{Success} every time a \texttt{Parser}
+  reduces successfully. While this is technically correct (reflecting
+  the ambiguity between greedy and non-greedy matching), it is almost
+  never the desired semantics.\parencite{spiewak}
+\end{quote}
+
+Scott and Johnstone's constructions of parsers from recognizers seem
+to rely on greedy matching, because their partitioning scheme only
+works with matches of the full input.  They also restrict packing to
+nodes that share the same partition, ``Nodes can be packed only if
+their yields correspond to the same portion of the input
+string''\parencite{sppfs_from_recognizers}.  This doesn't seem to work
+in cases with partial/non-greedy matching because every nontrivial
+node will have partial matches that don't cover the same partition.
+
+A final note on the greedy-matching issue is that the obvious
+implementation of nondeterminism applied naively leads to the wrong
+recognizer, because a partial match will report success even if the
+whole string is not matched.
+
+In \textcite{gll2}, they propose implementing the GSS and SPPF with a
+combination of arrays and linked lists, arrays where GLL requires
+constant-time lookup and linked lists to save space where $O(n)$
+lookups won't affect GLL's asymptotic behavior and trading time for
+space is acceptable.  As both the GSS and SPPF are graphs, this
+approach amounts to representing them with adjacency matrices and
+trying to used linked lists to reduce the matrices' space consumption.
+It depends on knowing the grammar and input to determine utilization
+counts, so an actual implementation would need heuristics to make
+these same judgments.  In a later paper, however, they say this
+implementation is not practical:
+
+\begin{quote}
+  One approach is to use a table of all possible elements, implemented
+  using sparse matrix techniques [12] in which table rows are
+  allocated on demand.  This technique is impractical for realistic
+  sized problems, since even with sparse optimisations, high memory
+  consumption leads to swapping during the parse.\parencite{gll3}
+\end{quote}
+
+From my own experience with Construct, I find this \emph{entirely}
+unsurprising.
+
+In \textcite{gll3}, they tried a different implementation:
+
+\begin{quote}
+  The natural object-oriented approach to constructing these data
+  structures defines a class for each kind of element using \emph{k}
+  individual reference fields to represent \emph{contains k-of}
+  relationships for small \emph{k} and some sort of collection class
+  (in Java, the HashMap generic) to represent \emph{contains many-of}
+  relationships. Each element of the data structures then becomes a
+  separate object, allocated on the heap.
+\end{quote}
+
+This also consumed too much memory because of the object overhead when
+creating millions of objects, as well being too slow because of
+garbage collection.  They work around these problems with an object
+pool, which of course amounts to doing manual memory management with
+all of its problems.
+
+The
+\href{https://github.com/yitzhakm/yakker/blob/master/src/history.ml}{ADT}
+that Yakker uses to represent its SPPF translated into pseudo-Python
+(using \texttt{typing}) looks something like,
+
+\begin{lstlisting}
+from collections import namedtuple
+import typing
+
+A = typing.TypeVar('a')
+Label = typing.TypeVar('Label')
+
+Root = namedtuple('Empty', 'label: Label')
+       | namedtuple('Root', 'info: Info[A, Label]')
+
+Info = namedtuple('Info', 'label: Label, v: A, branchings:
+                  List[Branching[A, Label]]')
+
+Branching = namedtuple('Branching', 'root: Root[A, Label]')
+            | namedtuple('Branching', 'root: (Root[A, Label], Root[A, Label])')
+
+\end{lstlisting}
+
+The Yakker SPPF is parameterized over the values the tree holds
+(\texttt{A}) and the type of the labels (\texttt{Label}), which in the
+\textcite{gll2} SPPF are symbols (nonterminals and terminals) and
+integers corresponding to input positions.  The list of
+\texttt{Branchings} corresponds to the or nodes; note that the
+out-degree of the list and packed nodes can be more than two.  The
+\texttt{Branchings} themselves are the sequence nodes and have
+out-degree of at most two.  Thus, the Yakker SPPF nodes embed both
+packing and normal branching in the same data structure, as each node
+contains a list of pairs of children.  Yakker uses a weak hash table
+containing links to all the partial trees in the forest, though the
+implementation seems to use the hash table like a set, with a function
+that checks directly if a partial tree is in the table and returning
+it if so.
+
+[TODO: discuss Marpa's.]
+
+There's one possible other implementation of the SPPF about which I
+know little called parse-forest grammars, introduced on pp. 91-93 of
+Grune and Jacobs.  They have production rules labeled almost
+identically to Johnstone and Scott's SPPF, a nonterminal, a starting
+position, and a length (which is isomorphic to using the ending
+position).  I personally don't see how any of the supposed advantages
+Grune and Jacobs list for them are good for writing practical parsers
+and the API they'd provide would be very unintuitive for people used
+to conventional parsers, but they're another possible internal
+implementation.
+
+My own experience and the results of Johnstone and Scott suggest that
+reducing the memory overhead of the SPPF is essential.  Also, all the
+nodes must be immutable to make sharing safe.  The sequence nodes must
+be implemented as a linked list, and the only linked list
+implementation available in the standard library is
+\texttt{collections.deque}.  An empty deque takes up 616 bytes
+according to \texttt{sys.getsizeof}, and while it doesn't scale
+quickly, increasing to 1128 bytes somewhere between 32 and 64
+elements, for an SPPF which will have many small linked lists it's
+completely unsuitable.  Deques are also mutable.  The two obvious
+options for implementing a linked list in Python are to use a class or
+tuples for nodes.  Tuples take more memory for some reason, 64 bytes
+for a two-element tuple compared to 56 bytes for a two-element class
+instance with \texttt{\_\_slots\_\_}, but are superior in all other
+respects because they guarantee immutability, which is otherwise
+impossible to enforce programmatically at the Python level, are much
+faster to initialize on CPython, and contain some useful methods
+implemented in C like \texttt{\_\_hash\_\_} and \texttt{\_\_eq\_\_}.  For the
+or nodes, tuples are the obvious correct implementation.  Frozensets
+are also immutable and have variable arity, but they have more memory
+overhead for no gain, because hashing parser instances in the
+alternation combinator should ensure that no or node is ever created
+containing duplicate subforests.
+
+The obvious implementation for looking up nodes by labels in Python is
+a dictionary i.e. a hash table.  Because hash tables have worst-case
+$O(n)$ lookup costs, parsing can take longer than $O(n^3)$ in the
+worst case, but the average case should remain the same.  Python's
+hash functions are well optimized to avoid collisions, but if
+necessary I could look at implementing my own hash functions if for
+some reason the generic implementations don't work well for parsing.
+This layout is an adjacency list representation of a graph with a hash
+table (dictionary) as the outer data structure and linked lists and
+arrays (tuples) as the inner data structures.  It's similar to
+\href{https://www.python.org/doc/essays/graphs/}{van Rossum's
+  suggested Python graph implementation} except that instead of
+holding labels, the inner data structures hold references to each
+other.  Holding references instead of labels saves memory because even
+a 64-bit pointer only consumes 8 bytes while a label made up of Python
+objects consumes much more and because, as Jeffrey Kegler pointed out
+to me, after the SPPF is constructed the structure holding labels
+pointing to nodes is no longer necessary and thus can be freed.
+
+One possible approach for the labels is use a three-tuples of a
+combinator instance and two integers, for sequence nodes, and
+two-tuples of a combinator instance and an integer, for or nodes, as
+keys.  Another is to use chained dictionaries, with the first
+dictionary containing combinator instances as keys and containing one
+or two further levels of dictionaries, depending on whether the
+combinator is a sequence or an alternation, with integers as keys.  In
+their testing on the GSS, \textcite{afroozeh_izmaylova} discovered
+that having one giant hash table performed worse than having multiple
+smaller hash tables, which argues in favor of the latter choice.  In
+my microbenchmarks building nested dictionaries or dictionaries with
+tuple keys and then doing lookups, tuple keys were about three times
+faster on CPython and nine times faster on Jython, while on PyPy
+nested dictionaries were about two times faster.  It will require
+profiling to decide between these two possible implementations.
+
+One problem with using tuples as the nodes is that on CPython, they
+can't be weak-referenced.  This makes it impossible to use Yakker's
+weak hash table approach to ensure that partial subforests in branches
+of the parse that ultimately fail are garbage-collected during parsing
+on CPython.  [I'm not clear on why Yakker needed to use this approach,
+since Kegler claims that Earley doesn't build partial forests that
+aren't part of the final forest.]  This should only matter when
+parsing inputs that are locally but not globally ambiguous, and it's
+not clear how important the memory savings are.  This will also
+require profiling.  If it turns out to be an issue, I wrote a linked
+list node as a simple Cython extension type that can be
+weak-referenced.  However, there's no good solution for the or nodes:
+an array is obviously the right data structure for them but there's no
+weak-referencable immutable array available in CPython, so I'm stuck
+either reimplementing tuple with weak reference support in Cython or
+using an ugly list subclass with the mutation methods overridden.
+PyPy and Jython tuples can be weak-referenced so don't have these
+problems.
+
+The clearly-fastest and smallest implementation on CPython with the
+best encapsulation is to use Cython to write a specialized SPPF
+object, with the exact methods needed for building it.  However, this
+solution doesn't work for any other Python implementation.  Given the
+problems that \textcite{gll3} reported with their Java implementation,
+it may also be necessary to push the SPPF data structures down levels
+of abstraction to save memory on all Python implementations.  It's not
+clear how one does this on PyPy, though it probably involves RPython.
+Any encapsulation has a performance overhead on CPython, Jython, and
+presumably IronPython because the parser will have to call methods
+written in Python, so they may also need lower-level implementations
+of the data structures for speed.  On the whole, I'm convinced enough
+of the advantages of encapsulation, particularly the possible need to
+reimplement data structures at lower levels of abstraction, that I
+will write the first version in Python with as much encapsulation as
+possible and then use profiling to decide what changes, if any, are
+necessary.  This Python version should serve as a good starting point
+for reimplementations in Cython and RPython, if necessary.
+
+\subsubsection{Cycles in the SPPF}
+\label{sec:sppf_cycles}
+
+Infinitely-ambiguous grammars can create SPPFs with cycles in them.  A
+natural case arises when trying to invert the grammar for a
+programming language that ignores whitespace, since all
+infinitely-many possible insertions of whitespace are valid.  In a
+language with eager evaluation like Python, it's impossible to
+represent cyclic data structures without mutation.  However, my
+design, a hash table pointing to singly-linked lists, depends on the
+immutability of the linked lists to implement sharing.  I'm ignoring
+this problem for now (Jeffrey Kegler notes that no one has ever used
+the cycle-handling code in Marpa), because infinitely-ambiguous
+grammars are of little use for practical parsing and will probably
+only come up during automatic grammar transformations (inversions,
+reversals, etc.).  If and when the issue arises, there are two
+possible ways to handle it: create a lazy singly-linked list data
+structure or detect cycles in grammars and rewrite them to be
+cycle-free.
+
+% <ceridwen> Idiosyncrat, How does Marpa handle the case of infinitely-ambiguous grammars in the SPPF, data-structure-wise?
+% <Idiosyncrat> With great difficulty. :-)
+%  Basically, you just keep track of everywhere there might be a cycle, and prevent it or make sure it is harmless.
+%  In the future, I will either simply ban cycles, or eliminate them in the grammar rewrite ...
+%  and eliminate the cycle-handling code from Libmarpa.
+%  I'm writing the Marpa Book as if it did not handle cycles.
+%  The great problem with previous parsers is they've been under-engineered ...
+%  Arguably, I erred in the opposite direction, and I will be backing some of that out.
+%  If you use the SLIF, it automatically bans cycles.
+% <ceridwen> Apparently this is a particularly painful problem, so it's no surprise I've been struggling with it.
+%  I'm most concerned about the case where an automatically-generated grammar creates an infinitely-ambiguous situation---an obvious case arises when trying to invert the grammar for a programming language that ignores whitespace, since all infinitely-many possible insertions of whitespace are valid.  The immediate problem is that I've been planning on using a hash table + immutable linked-list implementati
+%  on for the SPPF, but this does not play nicely with cycles in a language like Python with eager evaluation.
+%  My temptation is to stick with the design I have for now and then, when handling cycles, use lazy evaluation, but I don't know if that's going to get me into massive amounts of trouble.
+% <Idiosyncrat> Cycles can be detected ...
+%  it's yet another use for a transitive closure algorithm.
+%  That's what the SLIF current does -- it detects a cycle and prints a diagnostic.
+% <ceridwen> Since I want to deal with arbitrary CFGs and in some cases CSGs, I guess it's possible to automatically eliminate a cycle?
+% <Idiosyncrat> Consider what it means to handle an infinite cycle in the evalution phase.
+%  That is, you cannot actually perform an infinitely long evaluation.
+%  The usual thing to do is, when there is an infinite cycle, to refuse to do any processing.
+%  Currently Libmarpa will follow rules which involve infinite cycles for a length of 1 -- that is, until they repeat.
+%  Nobody every found a use for this.
+%  If anybody ever does find a use for this, it is better handled as a grammar rewrite.
+%  The cases where Libmarpa follows infinite cycles is where they, in addition to infinite cycle, also reach a terminal ...
+%  If a cycle is just simple A -> A where A is a non-terminal, then it's just an infinite loop, and Marpa does nothing with it.
+%  But if you have A ::= x | A ...
+%  that is an infinite cycle, but there is also a way to reach the terminal <x>, so Libmarpa (with the right options set) will do that
+%  and silently ignore the cycle.
+%  Most users are happiest if you just treat A ::= A | x as a fatal error.
+% <ceridwen> Infinite cycles like A -> A can be automatically eliminated without changing the language of the grammar, so I'm assuming that when I'm doing automatic grammar processing for inversion or error-handling, I will have to rewrite the grammars to avoid those.  The terminal cases are the ones that are tricky.  For inversion, they have to be disambiguated at some point.
+%  I was planning to have one ex-post-facto disambiguation system that runs during/after parsing, but I'm not sure that when dealing with an automatic inversion this is superior to forcing users to redefine the grammar to make it unambiguous.
+% <Idiosyncrat> To handle them as a grammar rewrite, just follow the paths, renaming symbols so they are unique per path ...
+%  paths end when you reach a terminal, in which case you use the path ...
+%  or when they cycle, in which case you do not use the path.
+% <ceridwen> For error-handling, it's not immediately clear to me what's right, though it's also not clear to me that the reverse grammar can even generate a cycle if one doesn't exist.  (I'm hoping not, honestly, but I haven't proven it yet.)
+% <Idiosyncrat> In some grammars this can lead to an explosion in the number of symbols and rules, but that's unavoidable.
+% <ceridwen> Right.  Can it be bounded?
+% <Idiosyncrat> It's bounded, yes.
+%  But I think it may be exponential if the cycle is a plex --
+%  something like A :: = B | C | D ; B ::= A | C | D; C ::= A | B | D; D ::= A | B | C
+%  they are actually some of these in Marpa::R2's test suite.
+%  Frankly, I'd love to have all the time I spent on them back to devote to other things. :-)
+%  Unfolding all the symbols and rules of a plex is (I think) exponential in the number of symbols ...
+% <ceridwen> Your advice, then, would be to stick with my current SPPF design and defer the cycles issue, possibly indefinitely?
+% <Idiosyncrat> so it is easy to automatically create a grammar which takes an impractical amount of time to rewrite.
+%  Y. E. S.
+%  That's exactly my advice.
+% <ceridwen> It's useful to know that no one's ever used them.  Thanks for the advice and notes on grammar-rewriting---that's probably a better solution than using lazy evaluation to circumvent the problem.
+% <Idiosyncrat> Yes, no users AFAICT.  The best evidence is when I quietly yanked support for them which I created the SLIF.  No complaints.  None.
+% In fact, no evidence that anybody even noticed the absence of support of cycles.
+
+
+% https://www.python.org/doc/essays/graphs/
+
+% Both trees and forests are fundamentally directed graphs, normally
+% acyclic but in the case of infinitely-ambiguous grammars cyclic.  In
+% Python, one possible graph implementation is a dict of lists, where
+% the lists contain the labels of other nodes.  By using the labels
+% discussed above as the labels for the nodes, it's possible to
+% represent a parse tree as a digraph where the values of leaf nodes are
+% Python objects representing terminals and the values of non-leaf nodes
+% are lists of either pairs of integers, the direct labels for other
+% nodes, or single integers representing the subpartitions for that
+% node.  Eliding the terminal and nonterminal symbols for clarity, for
+% instance:
+
+% \begin{lstlisting}
+% (1, 8) : [(1, 2), (2, 5), (5, 8)]
+% (1, 8) : [2, 5]
+% \end{lstlisting}
+
+% The superfluous integers correspond to the "repeated dimensions" that
+% Johnstone and Scott describe in \emph{Modelling GLL Parser
+%   Implementations} (2010).  The latter implementation obviously takes
+% less memory but node operations will be slower because correct
+% offset-pairs will have to be generated from the partitions when
+% they're needed.
+
+% The SPPF can have almost an identical implementation to the parse
+% trees themselves because it's also fundamentally a digraph.  There are
+% only two differences: nodes can have more than one parent,
+% corresponding to subtree sharing, and there has to be a way to
+% distinguish packed nodes from normal nodes because they have different
+% meanings.  In the binarized SPPF, Johnstone and Scott define normal
+% nodes using two offsets, called "left extent" and "right extent", and
+% packed nodes using a single integer, called "pivot."  In the
+% partition implementation any node with only two children can be
+% represented with a single integer, the division between the subtrees.
+% A packed node is the result of combining at least two nodes, so a
+% minimal binarized packed node looks like:
+
+% Original nodes:
+% \begin{lstlisting}
+% (0, 4): [(0, 1), (1, 4)]
+% (0, 4): [(0, 3), (3, 4)]
+% \end{lstlisting}
+
+% Packed node:
+% \begin{lstlisting}
+% (0, 4): [((0, 3), (3, 4)), ((0, 1), (1, 4))]
+% \end{lstlisting}
+
+% Binarized nodes:
+% \begin{lstlisting}
+% (0, 4): Packed(1), Packed(3)
+% Packed(1): [(0, 1), (1, 4)]
+% Packed(3): [(0, 3), (0, 4)]
+% \end{lstlisting}
+
+% A further observation that may or may not be related is that their
+% node labeling scheme seems to include unneeded information.  A given
+% parser started at the same position should always produce the same
+% output, so all that's needed for a unique node label is (parser label,
+% starting index into the input).  In fact, in one of their early
+% papers, \textcite{brnglr}, they use this labeling scheme, rather than
+% the later three-element labels.  I don't understand why, and if or how
+% this might be connected with greedy matching.  
+
 
 
 \subsection{Tree and SPPF API}
 \label{sec:tree_sppf_api}
+
+There's very little reason, as far as I can tell, to expose the
+internal node labels to the user.
 
 With a traditional recursive-descent parser, the definitions of the
 nonterminals in the grammar and their corresponding functions provide
@@ -503,7 +951,7 @@ understanding is that separating join and map separates the two, so
 having a semantic action combinator following a sequence combinator
 can simulate any choice of bind for monadic combinators.
 
-Irrespective of the internal representation, I also need to figure out
+Irrespective of the internal implementation, I also need to figure out
 the interface the SPPF presents to the users.  The SPPF itself is hard
 to understand so a direct implementation would make for a bad API.  My
 best idea for handling this is to build a tree-centric API where users
@@ -544,208 +992,8 @@ incompletely-realized partial ideas:
 \end{itemize}
 
 
-\subsection{Tree and SPPF representations}
-\label{sec:tree_sppf_representations}
-
-Traditional parser combinators don't provide any natural node labeling
-because of the absence of labeled nonterminals.  A tree representation
-based on high-level sequences and ordered mappings, in Python
-lists/tuples and OrderedDicts, doesn't need these node labels, and
-it's possible to implement combinators that return trees or an
-iterator over trees without them.  However, for a shared packed
-forest, labels are required for implementing subtree sharing because
-without them, combinators in different branches of the parse traversal
-have no way to know when they've generated the same subtree.
-Moreover, GLL needs labels to merge different branches of the parse in
-the GSS, so while it's possible to omit node labels altogether in a
-traditional recursive-descent parser, any GLL parser needs labels.
-There's an natural labeling scheme for parse trees based on
-partitioning the input that Scott and Johnstone use but never
-explicitly explain.  Each terminal or uninterrupted sequence of
-terminals has a starting and ending offset so the corresponding leaf
-node can be labeled with (terminals, starting\_offset,
-ending\_offset).  The leaf nodes read in offset order must cover the
-entire input, and in fact reading them in order in the absence of
-semantic actions will return the original input.  The rest of the tree
-nodes represent partitions further subdivided into subpartitions
-labeled with nonterminals, with the root node corresponding to
-(start\_symbol, 0, length(input) - 1) (zero-indexed).  Because parser
-combinators don't have nonterminal labels, Spiewak uses parser
-identity instead.  Like Spiewak, I intend to use parser combinator
-class instances as node labels in GLL.  Note that generator objects
-can't be used for this, since a new generator object is created every
-time a generator function is called, and neither can the method or
-code objects, because they're shared by all instances of the same
-parser combinator class.
-
-Both trees and forests are fundamentally directed graphs, normally
-acyclic but in the case of infinitely-ambiguous grammars cyclic.  In
-Python, one possible graph representation is a dict of lists, where
-the lists contain the labels of other nodes.  By using the labels
-discussed above as the labels for the nodes, it's possible to
-represent a parse tree as a digraph where the values of leaf nodes are
-Python objects representing terminals and the values of non-leaf nodes
-are lists of either pairs of integers, the direct labels for other
-nodes, or single integers representing the subpartitions for that
-node.  Eliding the terminal and nonterminal symbols for clarity, for
-instance:
-
-\begin{lstlisting}
-(1, 8) : [(1, 2), (2, 5), (5, 8)]
-(1, 8) : [2, 5]
-\end{lstlisting}
-
-The superfluous integers correspond to the "repeated dimensions" that
-Johnstone and Scott describe in \emph{Modelling GLL Parser
-  Implementations} (2010).  The latter representation obviously takes
-less memory but node operations will be slower because correct
-offset-pairs will have to be generated from the partitions when
-they're needed.
-
-The SPPF can have almost an identical representation to the parse
-trees themselves because it's also fundamentally a digraph.  There are
-only two differences: nodes can have more than one parent,
-corresponding to subtree sharing, and there has to be a way to
-distinguish packed nodes from normal nodes because they have different
-meanings.  In the binarized SPPF, Johnstone and Scott define normal
-nodes using two offsets, called "left extent" and "right extent", and
-packed nodes using a single integer, called "pivot."  In the
-partition representation any node with only two children can be
-represented with a single integer, the division between the subtrees.
-A packed node is the result of combining at least two nodes, so a
-minimal binarized packed node looks like:
-
-Original nodes:
-\begin{lstlisting}
-(0, 4): [(0, 1), (1, 4)]
-(0, 4): [(0, 3), (3, 4)]
-\end{lstlisting}
-
-Packed node:
-\begin{lstlisting}
-(0, 4): [((0, 3), (3, 4)), ((0, 1), (1, 4))]
-\end{lstlisting}
-
-Binarized nodes:
-\begin{lstlisting}
-(0, 4): Packed(1), Packed(3)
-Packed(1): [(0, 1), (1, 4)]
-Packed(3): [(0, 3), (0, 4)]
-\end{lstlisting}
-
-However, I don't understand the relationship between Scott and
-Johnstone's partition model and parses that don't consume all the
-input.  The natural way to implement nondeterminism leads to returning
-all incomplete parses as well as the complete parses.  Both Spiewak
-and Hutton and Meijer mention this natural ambiguity.
-
-\begin{quote}
-  It is also worth noting that we do not allow \texttt{Success}(es)
-  which have failed to consume the entire input stream.  We will
-  actually receive a \texttt{Success} every time a \texttt{Parser}
-  reduces successfully. While this is technically correct (reflecting
-  the ambiguity between greedy and non-greedy matching), it is almost
-  never the desired semantics.  (Spiewak)
-\end{quote}
-
-Scott and Johnstone's constructions of parsers from recognizers seem
-to rely on greedy matching, because their partitioning scheme only
-works with matches of the full input.  They also restrict packing to
-nodes that share the same partition, ``Nodes can be packed only if
-their yields correspond to the same portion of the input string''
-(Scott, \emph{SPPF-Style Parsing from Earley Recognisers}).  This
-doesn't seem to work in cases with partial/non-greedy matching because
-every nontrivial node will have partial matches that don't cover the
-same partition.
-
-A further observation that may or may not be related is that their
-node labeling scheme seems to include unneeded information.  A given
-parser started at the same position should always produce the same
-output, so all that's needed for a unique node label is (parser label,
-starting index into the input).  In fact, in one of their early papers
-(\emph{BRNGLR: a cubic Tomita-style GLR parsing algorithm}), they use
-this labeling scheme, rather than the later three-element labels.  I
-don't understand why, and if or how this might be connected with
-greedy matching.  A final note on the greedy-matching issue is
-that the obvious implementation of nondeterminism applied naively
-leads to the wrong recognizer, because a partial match will report
-success even if the whole string is not matched.
-
-In the aforementioned paper, they use a table-based representation
-for all the data structures, including the SPPF.  Following the data
-structure refinement process outlined there, the declarations for the
-SPPF are:
-
-\begin{verbatim}
-SPPFSymbolNode (SPPFLabel s, Int leftExtent, Int rightExtent)
-
-SPPFPackNode (SPPFLabel s, Int pivot)
-
-SPPF (SPPFSymbolNode symbolNode, SPPFPackNode packNode, SPPFSymbolNode left, SPPFSymbolNode right)
-
-SPPF sppf
-\end{verbatim}
-
-Substituting:
-
-\begin{verbatim}
-sppf ((*symbolNode) SPPFLabel, Int, Int)
-      (*packNode) SPPFLabel, Int)
-      (*left) SPPFLabel, Int, Int)
-      (*right) SPPFLabel, Int, Int)
-     )
-\end{verbatim}
-
-The left extent for the left node is the same as parent's, the left
-node's right extent is the same as the left extent of the right node,
-and the right extent for the right node is the same as the parent's.
-The SPPFLabel for the pack node and the parent node are also the same.
-
-\begin{verbatim}
-sppf ((*symbolNode) SPPFLabel, Int, Int)
-      (*packNode) Int)
-      (*left) SPPFLabel, Int)
-      (*right) SPPFLabel)
-     )
-\end{verbatim}
-
-This still seems like too much: it's a seven-dimensional table with
-four dimensions indexed by integers, which as they note in the paper
-is too large.
-
-The clearly-fastest implementation with the best encapsulation is to
-use Cython to write a specialized SPPF object, with the exact methods
-needed for building it, with an appropriate internal representation,
-possibly based on the ideas from the \emph{Modeling GLL
-  Implementations} refinement discussed above.  All other approaches
-will require methods implemented in Python (which will be slow) to do
-the necessary transformations.  To achieve anywhere near acceptable
-performance, I have to use native Python data structures or C/C++
-extensions.  Any encapsulation has a performance overhead because I
-won't be able to use comprehensions to speed up object creation, but
-beyond that full encapsulation from the parsers will cost more speed
-because they will have to call methods in Python.  On the whole, I'm
-convinced enough of the advantages of encapsulation, particularly the
-possible need to rewrite the whole thing in Cython, that the first
-version will involve partial encapsulation with methods written in
-Python for the user API and hard-coding the parsers.  On that point,
-there's very little reason, as far as I can tell, to expose the
-internal node labels to the user.
-
-There's one possible other representation of the SPPF about which I
-know little called parse-forest grammars, introduced on pp. 91-93 of
-Grune and Jacobs.  They have production rules labeled almost
-identically to Johnstone and Scott's SPPF, a nonterminal, a starting
-position, and a length (which is isomorphic to using the ending
-position).  I personally don't see how any of the supposed advantages
-Grune and Jacobs list for them are good for writing practical parsers
-and the API they'd provide would be very unintuitive for people used
-to conventional parsers, but they're another possible internal
-representation.
-
-
-\subsection{Immutability vs. mutability}
-\label{sec:immutable_mutable}
+\subsection{Mutability versus persistence}
+\label{sec:mutability_persistence}
 
 There are two different approaches to the data flow through the
 parser, the functional-immutable style where functions, or in this
@@ -884,7 +1132,12 @@ don't understand it well enough to enumerate its advantages and
 disadvantages.
 
 
-\subsection{Outer-Loop Trampoline}
+\subsection{Functions versus coroutines versus continuations}
+\label{sec:functions_coroutines_continuations}
+
+% TODO: rewrite this section
+
+\subsubsection{Outer-Loop Trampoline}
 \label{sec:trampoline}
 
 In Python, the trampoline has to run as the outermost loop and call
@@ -896,7 +1149,7 @@ dispatch function such that every parser returns control to it after
 finishing execution, which is my trampoline.
 
 
-\subsection{Yield from}
+\subsubsection{Yield from}
 \label{sec:yield_from}
 
 The main problem with "yield from" is that it's only available on
@@ -1216,6 +1469,33 @@ possible way with no dispatch to supertypes at all.
 \section{Notes}
 \label{sec:notes}
 
+
+\subsection{Lookahead Algorithms for GLL}
+\label{sec:gll_lookahead}
+
+One possibility for increasing the set of languages that GLL can parse
+in linear time is to use a different lookahead algorithm.  ANTLR3 and
+ANTLR4 more or less directly use DFAs to predict which alternative to
+pick and thus enable a conventional top-down parser to work on a set
+the authors call LL(*) \parencites{antlr3, antlr4}, which I think is
+equivalent to LL-regular (though LL-regular is a proper subset of the
+LR-regular languages\parencite{ll-regular}), though with a worst-case
+time complexity of $O(n^4)$.  It's possible the same approach might
+work for GLL to allow it to run in sub-quadratic time on LL-regular
+grammars or to improve its constant factors by allowing it to run in
+recursive-descent mode on a broader class of inputs.  To improve its
+worst-case asymptotic performance, the lookahead would have to
+terminate deterministically before reading the whole input.
+
+
+\subsection{Afroozeh/Ismaylova's versus Spiewak's GSS}
+\label{sec:gss_details}
+
+
+\subsection{Yakker SPPF}
+\label{sec:yakker_sppf}
+
+
 \subsection{Type Checking}
 \label{sec:type_checking}
 
@@ -1234,33 +1514,39 @@ of Python's dynamic type system since it involves a form of static
 analysis, though the addition of gradual typing to 3.5 undermines this
 argument.
 
-\subsection{Yakker SPPF}
-\label{sec:yakker_sppf}
+Since combinators pass the same input stream among themselves, to
+avoid generating runtime errors due to passing text to terminal
+combinators expecting binary data or binary data to combinators
+expecting text, all combinators will be assigned as either text or
+binary data.  Higher-order combinators inherit their type from their
+sub-combinators while terminals have their data type explicitly
+defined.  While some terminals are always binary (struct), others
+depend on how they're initialized (re, string.startswith, and possibly
+bits depending on which backend I use and how I set up the API).  In
+Python 2, objects of type 'str' are treated as binary data and objects
+of type 'unicode' are treated as text.  In Python 3, objects of type
+'str' are treated as text and types 'bytes' and 'bytearray' are
+treated as binary data.  Objects of type 'memoryview' are binary on
+both.  This can lead to weird situations where the Strings combinator
+accepts binary data, but that's a consequence of Python's design and
+not something I can do anything about.
 
-The major differences between my current implementation and the Yakker
-implementation are:
+Testing on 3.4 and 2.7 suggests that struct doesn't actually care what
+it's given, bytes, str, or unicode, but enforcing consistency on its
+input won't hurt.  array accepts *only* native strings, so str/bytes
+on Python 2 and str/unicode on Python 3.
 
-\begin{itemize}
-\item The non-packed nodes in their tree are binarized.
-\item Nodes embed both packing and the normal branching in the same
-  data structure.  Each node contains a list of pairs of children.
-\item Every node contains, in addition to its children, an arbitrary
-  semantic value and a label.
-\item Both have a weak hash table containing links to all the partial
-  trees in the forest.  However, their implementation seems to use the
-  hash table like a set, with a function that checks directly if a
-  partial tree is in the table and returning it if so.
-\end{itemize}
 
 \subsection{Parse-forest grammars and adjacency-list digraphs}
 \label{sec:parse-forest_grammars_adjacency-list_digraphs}
 
-My original representation of trees/forests as digraphs using
+My original implementation of trees/forests as digraphs using
 adjacency lists containing node labels (rather than node references)
 is very close (I haven't done the detailed analysis to determine how
 close) to a parse-forest grammar.  I don't know if there are uses for
 this interpretation, but it's something to keep in mind especially
 when considering code generation and error handling.
+
 
 \subsection{Arrow combinators}
 \label{sec:arrow_combinators}
@@ -1278,11 +1564,14 @@ sure: is there some kind of model that can incorporate both the
 necessary dependence on past parse results and the separation of
 static and dynamic elements in arrows?  I don't know.
 
+
 \subsection{Tunnel / Monadic Bind?}
 \label{sec:tunnel_bind}
 
 Is there a connection?  I actually think I can implement Tunnel with
 Act/>>.
+
+
 
 \printbibliography
 

@@ -4,10 +4,12 @@
 
 # Licensed under The MIT License (MIT).
 
+# Modified by me.
+
 from __future__ import print_function
 from sys import getsizeof, stderr
 from itertools import chain
-from collections import deque
+from collections import deque, OrderedDict
 try:
     from reprlib import repr
 except ImportError:
@@ -24,15 +26,14 @@ def total_size(o, handlers={}, verbose=False):
                     OtherContainerClass: OtherContainerClass.get_elements}
 
     """
+    all_handlers = OrderedDict(handlers)
     dict_handler = lambda d: chain.from_iterable(d.items())
-    all_handlers = {tuple: iter,
-                    list: iter,
-                    deque: iter,
-                    dict: dict_handler,
-                    set: iter,
-                    frozenset: iter,
-                   }
-    all_handlers.update(handlers)     # user handlers take precedence
+    all_handlers.update({tuple: iter,
+                         list: iter,
+                         deque: iter,
+                         dict: dict_handler,
+                         set: iter,
+                         frozenset: iter})
     seen = set()                      # track which object id's have already been seen
     default_size = getsizeof(0)       # estimate sizeof object without __sizeof__
 

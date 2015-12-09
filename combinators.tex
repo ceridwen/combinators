@@ -19,6 +19,8 @@
 
 \maketitle
 
+\tableofcontents
+
 \section{Overview}
 \label{sec:overview}
 
@@ -752,6 +754,22 @@ possible and then use profiling to decide what changes, if any, are
 necessary.  This Python version should serve as a good starting point
 for reimplementations in Cython and RPython, if necessary.
 
+\subsubsection{Labeling the end nodes of linked lists}
+\label{sec:end_node_labels}
+
+In a canonical linked list, the end node's reference to the next
+element contains a special element, in this case an empty tuple,
+signaling it's the end of the list.  Unfortunately, when it comes to
+labeling, the left and right extents of the end node are the same as
+those of the object it contains.  Scott and Johnstone resolve this
+issue by making their end nodes contain two non-node objects, but this
+complicates the implementation of the linked list.  I'm keeping the
+list implementation simple by making sure that when an object is
+contained by an end node that that end node is represented by the
+label in the SPPF.  (Otherwise, the SPPF will contain many different
+end nodes, each referring to the same underlying object.)   This is
+awkward and has a memory cost, but the other alternative is also awkward.
+
 \subsubsection{Cycles in the SPPF}
 \label{sec:sppf_cycles}
 
@@ -767,10 +785,10 @@ this problem for now (Jeffrey Kegler notes that no one has ever used
 the cycle-handling code in Marpa), because infinitely-ambiguous
 grammars are of little use for practical parsing and will probably
 only come up during automatic grammar transformations (inversions,
-reversals, etc.).  If and when the issue arises, there are two
+reversals, etc.).  If and when the issue arises, there are three
 possible ways to handle it: create a lazy singly-linked list data
-structure or detect cycles in grammars and rewrite them to be
-cycle-free.
+structure, detect cycles in grammars and rewrite them to be
+cycle-free, or use a cycle-generating function like Haskell's.
 
 % <ceridwen> Idiosyncrat, How does Marpa handle the case of infinitely-ambiguous grammars in the SPPF, data-structure-wise?
 % <Idiosyncrat> With great difficulty. :-)

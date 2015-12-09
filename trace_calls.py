@@ -3,12 +3,14 @@ import sys
 
 
 class TraceCalls(object):
-    def __init__(self, stream=sys.stdout, indent='  ', files=()):
+    def __init__(self, stream=sys.stdout, indent='  ', files=(),
+                 print_locals=True):
         self.stream = stream
         self.indent = indent
         self.files = frozenset(files)
         self.stack_depth = 0
         self.max_depth = 0
+        self.print_locals = print_locals
     def __call__(self, frame, event, arg):
         if event == 'call':
             if not self.files or frame.f_code.co_filename in self.files:
@@ -17,7 +19,7 @@ class TraceCalls(object):
                     self.max_depth = self.stack_depth
                 name = frame.f_code.co_name
                 print(self.indent * self.stack_depth, frame.f_code.co_filename, name)
-                if not (name == '__str__' or name == '__init__' or name == '<lambda>'):
+                if self.print_locals and not (name == '__str__' or name == '__init__' or name == '<lambda>'):
                     pprint.pprint(frame.f_locals)
         elif event == 'return':
             if not self.files or frame.f_code.co_filename in self.files:

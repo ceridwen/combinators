@@ -1,4 +1,4 @@
- #!/usr/bin/python3
+#!/usr/bin/python3
 
 from __future__ import absolute_import, division, print_function
 
@@ -255,14 +255,15 @@ class Combinator(six.with_metaclass(abc.ABCMeta, object)):
                         # print(success, tree, failure, current_index)
                         success(tree, failure, current_index)
 
-            def trampoline_failure(message, current_index, combinator=combinator, past_index=index, setup_popped=setup_popped):
-                result = Failure(message, stream, current_index)
-                setup_popped()
-                setup_saved(result)
-                for success in self.backlinks[past_index][combinator]:
-                    # print(success, failure)
-                    if success not in self.saved[result]:
-                        self.saved[result].add(success)
+            # def trampoline_failure(message, current_index, combinator=combinator, past_index=index, setup_popped=setup_popped):
+            #     result = Failure(message, stream, current_index)
+            #     setup_popped()
+            #     setup_saved(result)
+            #     for success in self.backlinks[past_index][combinator]:
+            #         # print(success, failure)
+            #         if success not in self.saved[result]:
+            #             self.saved[result].add(success)
+
             combinator._parse(self, trampoline_success, nonterminal_failure, stream, index)
 
         if successes:

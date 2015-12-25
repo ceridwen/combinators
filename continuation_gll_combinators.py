@@ -46,43 +46,41 @@ def read_only(value):
 #         return 'Failure: %s' % (self.message % self.data[self.index:])
 #     __repr__ = __str__
 
-GrammarSlot = read_only(collections.namedtuple('GrammarSlot', 'combinator slot'))
-
 class GraphStructuredStack(object):
     NodeLabel = read_only(collections.namedtuple('NodeLabel', 'combinator index'))
     Node = read_only(collections.namedtuple('Node', 'edges U P'))
-    # Edge = read_only(collections.namedtuple('Edge', 'to sppf'))
-    Edge = read_only(collections.namedtuple('Edge', 'slot to sppf'))
+    Edge = read_only(collections.namedtuple('Edge', 'continuation index'))
 
     def __init__(self):
         self.nodes = {}
         self.dispatch_stack = []
 
-    def create(self, L: GrammarSlot, from_label: NodeLabel, index: int, sppf: BaseForest):
-        to_label = self.NodeLabel(L.combinator, index)
+    def create(self, called: 'Combinator', calling: 'Combinator',
+               continuation, index: int):
+        to_label = self.NodeLabel(called, index)
         if to_label in self.nodes:
             to_node = self.nodes[to_label]
-            to_node.edges.append(self.Edge(L, to_label, sppf))
-            for v, z in to.P:
-                self.add(L, u, k)
+            for right_extent in to_node.P:
+                self.add(called, continuation, right_extent)
         else:
-            to = self.Node([], set(), set())
+            to_node = self.Node([], set(), set())
+            self.nodes[to_label] = to_node
+        to_node.edges.append(self.Edge(called._parse, index))
+        return to_node
 
-            self.nodes[label] = to
-        to.edges[L] = self.Edge(gss_node, sppf)
-        return to
+    def pop(self, combinator: 'Combinator', index: int, right_extent: int):
+        gss_node = self.nodes[self.NodeLabel(combinator, index)]
+        if right_extent not in gss_node.P:
+            gss_node.P.add(right_extent)
+            for continuation, i in gss_node.edges:
+                self.add(combinator, continuation, i)
 
-    def pop(self, u, index):
-        if index not in u.P:
-            u.P.add(i)
-            for L in u.edges:
-                self.add(L, u.edges[L], i)
-
-    def add(self, L: GrammarSlot, node: Node, index: int):
-        d = self.Descriptor(L, node, index)
-        if d not in u.U:
-            self.dispatch_stack.append(d)
-            u.U.add(L)
+    def add(self, combinator: 'Combinator', continuation, index: int):
+        gss_node = self.nodes[self.NodeLabel(combinator, index)]
+        L = (continuation, index)
+        if L not in gss_node.U:
+            self.dispatch_stack.append(L)
+            gss_node.U.add(L)
 
     def __str__(self):
         return '\n'.join(['\nGSS', 'Stack', pprint.pformat(self.dispatch_stack), 'Nodes', pprint.pformat(self.nodes)])

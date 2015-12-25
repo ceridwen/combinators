@@ -36,14 +36,27 @@ class LabeledForest(dict):
     #     super(LabeledForest, self).__init__(*args, **kws)
 
     def __str__(self):
-        # '''Using WeakValueDictionary's __repr__ creates infinite recursion in
-        # pprint, so I still have to use .items() to avoid it.
-
-        # '''
         return pprint.pformat(dict(self.items()), width=80)
 
     def __repr__(self):
         return '%s(%s)' % (type(self).__name__, pprint.pformat(dict(self.items()), width=80))
+
+    def seq_node(self, slot, children):
+        label = (slot, , right_extent)
+        if label in self:
+            return self[label]
+        node = Forest(*children)
+        self[label] = node
+        return node
+
+    def or_node(self, combinator, pivot, *children):
+        label = (combinator, pivot)
+        if label in self:
+            return self[label]
+        node = OrForest(*children)
+        self[label] = node
+        return node
+        
 
     # def is_tree(self):
     #     '''If this SPF is a tree (has no or nodes), returns True.'''

@@ -1488,6 +1488,23 @@ possible way with no dispatch to supertypes at all.
 \label{sec:notes}
 
 
+\subsection{Commit Notes}
+\label{sec:commit_notes}
+
+Adapting the algorithm to a functional style and Python has required
+some changes.
+
+* Spiewak uses a while loop in the trampoline but direct calls for the
+continuations that build the trees.  Because Python doesn't eliminate
+tail calls, I force all the continuations to go through the
+trampoline.
+
+* The original version of GLL relies on labels pointing to code
+blocks, but Python has first-class functions, so I can reify the
+labels into functions.
+
+
+
 \subsection{Memo Tables on Combinators}
 \label{sec:memo_tables}
 

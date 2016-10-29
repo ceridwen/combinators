@@ -757,6 +757,9 @@ for reimplementations in Cython and RPython, if necessary.
 \subsubsection{Labeling the end nodes of linked lists}
 \label{sec:end_node_labels}
 
+TODO: what to do about the natural incomplete parse ambiguity and
+labels?
+
 In a canonical linked list, the end node's reference to the next
 element contains a special element, in this case an empty tuple,
 signaling it's the end of the list.  Unfortunately, when it comes to
@@ -1486,6 +1489,15 @@ possible way with no dispatch to supertypes at all.
 
 \section{Notes}
 \label{sec:notes}
+
+
+\subsection{Data Structures}
+\label{sec:data_structures}
+
+OrderedDict
+
+https://bugs.python.org/issue16991
+\url{https://hg.python.org/cpython/file/default/Objects/odictobject.c#l1}
 
 
 \subsection{Commit Notes}

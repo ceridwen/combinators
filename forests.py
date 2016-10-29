@@ -42,7 +42,7 @@ class LabeledForest(dict):
         return '%s(%s)' % (type(self).__name__, pprint.pformat(dict(self.items()), width=80))
 
     def seq_node(self, slot, children):
-        label = (slot, , right_extent)
+        label = (slot, right_extent)
         if label in self:
             return self[label]
         node = Forest(*children)

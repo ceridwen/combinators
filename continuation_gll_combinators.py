@@ -11,7 +11,7 @@ import struct
 
 import six
 
-from spf import LabeledForest, BaseForest
+from forests import LabeledForest, BaseForest
 
 
 # TODO: properly segregate the GSS in its own data structure
@@ -263,7 +263,7 @@ class Alternation(Combinator):
 
     def _parse(self, sppf, gss, success, failure, data, index):
         for combinator in self.combinators:
-            gss.add(combinator, index)
+            gss.add(self, combinator._parse, index)
 
     def __or__(self, other):
         if isinstance(other, Alternation):

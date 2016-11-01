@@ -1,4 +1,9 @@
+'''Parser combinators for Python 2, based on the grammar in the Python
+documentation.  Call the parse method of single_input, file_input, and
+eval_input.'''
+
 import argparse
+import pprint
 import token
 import tokenize
 import types
@@ -62,12 +67,6 @@ KEYWORDS = types.MappingProxyType({keyword: KeywordOrOp('NAME', keyword) for key
 
 OPS = types.MappingProxyType({op: KeywordOrOp('OP', op) for op in ('+', '-', '*', '**', '/', '//', '%', '<<', '>>', '&', '|', '^', '~', '<', '>', '<=', '>=', '==', '!=', '<>', '(', ')', '[', ']', '{', '}', '@', ',', ':', '.', '`', '=', ';', '+=', '-=', '*=', '/=', '//=', '%=', '&=', '|=', '^=', '>>=', '<<=', '**=')})
 
-# tokenize generates a different token for newlines that occur after
-# code and newlines on blank lines, but the grammar doesn't take
-# account of the difference, so this combinator represents both.
-
-newline = TOKENS['NEWLINE'] | TOKENS['NL']
-
 
 class Succeed(combinators.Combinator):
     def __init__(self, **kws):
@@ -90,12 +89,22 @@ def option(combinator):
 def ops_alternation(*strings):
     return combinators.Alternation(*[OPS[string] for string in strings])
 
-def max_result(results):
-    max_result = combinators.Success('', '', -1)
+def max_results(results):
+    max_results = [combinators.Success('', '', -1)]
     for result in results:
-        if result.index > max_result.index:
-            max_result = result
-    return max_result
+        if result.index > max_results[0].index:
+            max_results = [result]
+        elif result.index == max_results[0].index:
+            max_results.append(result)
+    return max_results
+
+# tokenize generates a different token for newlines that occur after
+# code and newlines on blank lines, but the grammar doesn't take
+# account of the difference, so this combinator represents both.
+# Comments may always optionally occur before newlines, but aren't
+# included in the grammar.
+
+newline = option(TOKENS['COMMENT']) + (TOKENS['NEWLINE'] | TOKENS['NL'])
 
 
 # The grammar is taken from
@@ -137,7 +146,7 @@ fpdef = TOKENS['NAME'] |  OPS['('] + combinators.Lazy(lambda: fplist) + OPS[')']
 fplist = fpdef + star(OPS[','] + fpdef) + option(OPS[','])
 varargslist = (star(fpdef + option(OPS['='] + combinators.Lazy(lambda: test)) + OPS[',']) +
                (OPS['*'] + TOKENS['NAME'] + option(OPS[','] + OPS['**'] + TOKENS['NAME']) | OPS['**'] + TOKENS['NAME'] |
-                fpdef + option(OPS['='] + combinators.Lazy(lambda: test)) + star(OPS[','] + fpdef + option(OPS['='] + combinators.Lazy(lambda: test))) + OPS[',']))
+                fpdef + option(OPS['='] + combinators.Lazy(lambda: test)) + star(OPS[','] + fpdef + option(OPS['='] + combinators.Lazy(lambda: test))) + option(OPS[','])))
 
 import_name = KEYWORDS['import'] + dotted_as_names
 import_as_name = TOKENS['NAME'] + option(KEYWORDS['as'] + TOKENS['NAME'])
@@ -152,7 +161,9 @@ assert_stmt = KEYWORDS['assert'] + combinators.Lazy(lambda: test) + option(OPS['
 small_stmt = expr_stmt | print_stmt | del_stmt | pass_stmt | flow_stmt | import_stmt | global_stmt | exec_stmt | assert_stmt
 simple_stmt = small_stmt + star(OPS[';'] + small_stmt) + option(OPS[';']) + newline
 
-suite = simple_stmt | newline + TOKENS['INDENT'] + plus(combinators.Lazy(lambda: stmt)) + TOKENS['DEDENT']
+# The grammar is wrong here because there can be multiple newlines
+# (including commments) in a suite.
+suite = simple_stmt | plus(newline) + TOKENS['INDENT'] + plus(combinators.Lazy(lambda: stmt)) + TOKENS['DEDENT']
 
 if_stmt = KEYWORDS['if'] + combinators.Lazy(lambda: test) + OPS[':'] + suite + star(KEYWORDS['elif'] + combinators.Lazy(lambda: test) + OPS[':'] + suite) + option(KEYWORDS['else'] + OPS[':'] + suite)
 while_stmt = KEYWORDS['while'] + combinators.Lazy(lambda: test) + OPS[':'] + suite + option(KEYWORDS['else'] + OPS[':'] + suite)
@@ -182,14 +193,14 @@ list_for = KEYWORDS['for'] + combinators.Lazy(lambda: exprlist) + KEYWORDS['in']
 list_iter = list_for | list_if
 
 argument = combinators.Lazy(lambda: test) + option(comp_for) | combinators.Lazy(lambda: test) + OPS['='] + combinators.Lazy(lambda: test)
-arglist = star(argument + OPS[',']) + (argument + OPS[','] | OPS['*'] + combinators.Lazy(lambda: test) + star(OPS[','] + argument) + option(OPS[','] + OPS['**'] + combinators.Lazy(lambda: test)) | OPS['**'] + combinators.Lazy(lambda: test))
+arglist = star(argument + OPS[',']) + (argument + option(OPS[',']) | OPS['*'] + combinators.Lazy(lambda: test) + star(OPS[','] + argument) + option(OPS[','] + OPS['**'] + combinators.Lazy(lambda: test)) | OPS['**'] + combinators.Lazy(lambda: test))
 classdef = KEYWORDS['class'] + TOKENS['NAME'] + option(OPS['('] + option(combinators.Lazy(lambda: testlist))) + OPS[')'] + OPS[':'] + suite
 dictorsetmaker = (combinators.Lazy(lambda: test) + OPS[':'] + combinators.Lazy(lambda: test) + (comp_for | (star(OPS[','] + combinators.Lazy(lambda: test)) + OPS[',']))) | (combinators.Lazy(lambda: test) + (comp_for | (star(OPS[','] + combinators.Lazy(lambda: test)) + OPS[','])))
 testlist = combinators.Lazy(lambda: test) + star(OPS[','] + combinators.Lazy(lambda: test)) + option(OPS[','])
 exprlist = combinators.Lazy(lambda: expr) + star(OPS[','] + combinators.Lazy(lambda: expr)) + option(OPS[','])
 sliceop = OPS[':'] + option(combinators.Lazy(lambda: test))
 subscript = (OPS['.'] + OPS['.'] + OPS['.']) | combinators.Lazy(lambda: test) | option(combinators.Lazy(lambda: test)) + OPS[':'] + option(combinators.Lazy(lambda: test)) + option(sliceop)
-subscriptlist = subscript + star(OPS[','] + subscript) + OPS[',']
+subscriptlist = subscript + star(OPS[','] + subscript) + option(OPS[','])
 trailer = (OPS['('] + option(arglist) + OPS[')']) | (OPS['['] + subscriptlist + OPS[']']) | (OPS['.'] + TOKENS['NAME'])
 lambdef = KEYWORDS['lambda'] + option(varargslist) + OPS[':'] + combinators.Lazy(lambda: test)
 testlist_comp = combinators.Lazy(lambda: test) + (comp_for | star(OPS[','] + combinators.Lazy(lambda: test)) + OPS[','])
@@ -216,6 +227,7 @@ test = (or_test + option(KEYWORDS['if'] + or_test + KEYWORDS['else'] + combinato
 
 testlist1 = test + star(OPS[','] + test)
 
+
 if __name__ == '__main__':
     arg_parser = argparse.ArgumentParser(description='Parse Python code.')
     arg_parser.add_argument('file', nargs='?',
@@ -223,11 +235,17 @@ if __name__ == '__main__':
     f = open(arg_parser.parse_args().file, 'r')
     tokens = [(token.tok_name[t[0]], t[1]) for  t in tokenize.generate_tokens(f.readline)]
     # print(tokens)
-
-    result = max_result(file_input.parse(tokens))
-    print(result)
-    # print(result.index)
-    # print(tokens[result.index - 20:result.index + 20])
+    results = file_input.parse(tokens)
+    print([(type(r), r.index) for r in results])
+    result = max_results(results)
+    if isinstance(result[0], combinators.Success):
+        print(result)
+    else:
+        print(result[0].index)
+        pprint.pprint([r.message for r in result])
+        print(tokens[result[0].index:result[0].index + 20])
+        print(tokens[result[0].index - 20:result[0].index])
+    # print(tokens[result[0].index:])
     # print(''.join(t[1] for t in tokens[result.index - 20:result.index + 20]))
     # if result.index == 0:
     #     print(tokens)

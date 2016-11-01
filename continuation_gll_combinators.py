@@ -81,7 +81,9 @@ class Failure(Result):
     def copy(self):
         return Failure(self.message, self.stream, self.index)
     def __str__(self):
-        return 'Failure: %s' % (self.message % self.stream[self.index:])
+        return 'Failure: %s, %s' % (self.message, self.stream[self.index:])
+    # def __str__(self):
+    #     return 'Failure: %s' % (self.message % self.stream[self.index:])
     __repr__ = __str__
 
 
@@ -387,37 +389,55 @@ class Sequence(Combinator):
 #     __rmul__ = __mul__
 
 
+# class Lazy(Combinator):
+#     def __init__(self, name):
+#         if (six.PY3 and name.isidentifier()) or name.isalnum():
+#             vars(self)['name'] = name
+#         else:
+#             raise SyntaxError("Lazy initialized with a string that isn't a valid Python identifier: %s" % name)
+
+#     def combinator(self):
+#         try:
+#             return vars(self)['combinator']
+#         except KeyError:
+#             frames = inspect.getouterframes(inspect.currentframe())
+#             # print(frames)
+#             try:
+#                 for frame in frames:
+#                     combinator = frame[0].f_locals.get(self.name, None)
+#                     if combinator:
+#                         break
+#                     else:
+#                         combinator = frame[0].f_globals.get(self.name, None)
+#                         if combinator:
+#                             break
+#                 else:
+#                     raise NameError("Name '%s' isn't defined" % self.name)
+#             finally:
+#                 del frames
+#             if isinstance(combinator, Combinator):
+#                 vars(self)['combinator'] = combinator
+#                 return combinator
+#             else:
+#                 raise TypeError("'%s' refers to an object that is a %s instead of a combinator." % (self.name, type(combinator)))
+
+#     combinator = property(combinator)
+
+#     def _parse(self, trampoline, success, failure, stream, index):
+#         combinator = self.combinator
+#         self._parse = combinator._parse
+#         combinator._parse(trampoline, success, failure, stream, index)
+
+
 class Lazy(Combinator):
-    def __init__(self, name):
-        if (six.PY3 and name.isidentifier()) or name.isalnum():
-            vars(self)['name'] = name
-        else:
-            raise SyntaxError("Lazy initialized with a string that isn't a valid Python identifier: %s" % name)
+    def __init__(self, function):
+        vars(self)['function'] = function
 
     def combinator(self):
         try:
             return vars(self)['combinator']
         except KeyError:
-            frames = inspect.getouterframes(inspect.currentframe())
-            # print(frames)
-            try:
-                for frame in frames:
-                    combinator = frame[0].f_locals.get(self.name, None)
-                    if combinator:
-                        break
-                    else:
-                        combinator = frame[0].f_globals.get(self.name, None)
-                        if combinator:
-                            break
-                else:
-                    raise NameError("Name '%s' isn't defined" % self.name)
-            finally:
-                del frames
-            if isinstance(combinator, Combinator):
-                vars(self)['combinator'] = combinator
-                return combinator
-            else:
-                raise TypeError("'%s' refers to an object that is a %s instead of a combinator." % (self.name, type(combinator)))
+            return self.function()
 
     combinator = property(combinator)
 
@@ -426,7 +446,7 @@ class Lazy(Combinator):
         self._parse = combinator._parse
         combinator._parse(trampoline, success, failure, stream, index)
 
-
+        
 class Action(Combinator):
     def __init__(self, combinator, action):
         self.combinator = combinator
@@ -520,7 +540,7 @@ class Strings(Terminal):
         trees = []
         for string, length in self.strings_lengths:
             if (length > len(stream) - index):
-                return failure('Unexpected end of stream (expected %r, got %%r)' % string, index)
+                return failure('Unexpected end of stream (expected %r)' % string, index)
             else:
                 if stream.startswith(string, index):
                     trees.append(string)
@@ -641,11 +661,11 @@ if __name__ == '__main__':
     print('Hex success,', alpha_or_hex.parse('123'))
 
     a = Strings('a')
-    l = Lazy('a')
+    l = Lazy(lambda: a)
     print('Lazy,', l.parse('a'))
     print('Lazy,', l.parse('a'))
     
-    ambiguous = (Lazy('ambiguous') + Lazy('ambiguous') + Lazy('ambiguous')) | (Lazy('ambiguous') + Lazy('ambiguous')) | Strings('a')
+    ambiguous = (Lazy(lambda: ambiguous) + Lazy(lambda: ambiguous) + Lazy(lambda: ambiguous)) | (Lazy(lambda: ambiguous) + Lazy(lambda: ambiguous)) | Strings('a')
     print('Highly ambiguous,', ambiguous.parse('aaa'))
     # pprint.pprint(ambiguous.combinators)
 
@@ -654,14 +674,14 @@ if __name__ == '__main__':
     # deterministic behavior at the word level here is probably more
     # realistic for profiling.
     word = Regex('([a-zA-Z]+)')
-    sentence = ((word + Strings('.')) >> (lambda t: t[0])) | ((word + Regex(r'[\s,]') + Lazy('sentence')) >> (lambda t: t[0][0] + t[1]))
+    sentence = ((word + Strings('.')) >> (lambda t: t[0])) | ((word + Regex(r'[\s,]') + Lazy(lambda: sentence)) >> (lambda t: t[0][0] + t[1]))
     print('Sentence success,', sentence.parse('The quick brown fox jumps over the lazy dog.'))
 
     num = (Strings('0') | Strings('1')) >> (lambda t: int(t[0]))
     print('Calculator,', num.parse('010101'))
     print('Calculator,', num.parse('101010'))
 
-    expr = (num + Strings('+') + Lazy('expr')) >> (lambda t: t[0][0] + t[1]) | (num + Strings('-') + Lazy('expr')) >> (lambda t: t[0][0] - t[1]) | num
+    expr = (num + Strings('+') + Lazy(lambda: expr)) >> (lambda t: t[0][0] + t[1]) | (num + Strings('-') + Lazy(lambda: expr)) >> (lambda t: t[0][0] - t[1]) | num
 
     print('Calculator,', expr.parse('1+1'))
     print('Calculator,', expr.parse('1+1+1'))
@@ -685,7 +705,7 @@ if __name__ == '__main__':
             print(i, timeit.timeit('ambiguous.parse("' + i * 'a' + '")', 'gc.enable(); from __main__ import ambiguous', number=1000), 'seconds')
 
     cProfile.run('''
-time_ambiguous(9)
+time_ambiguous(7)
 ''')
 
     if six.PY3 and CPYTHON:
